@@ -1,0 +1,40 @@
+#
+# Nemesis System module configuration
+#
+
+[worldserver]
+
+#
+#    NemesisSystem.Enable
+#        Description: Enables the Nemesis System module.
+#        Default:     1 - enabled
+#                     0 - disabled
+#
+
+NemesisSystem.Enable = 1
+
+#
+#    NemesisSystem.MaxRank
+#        Description: Maximum rank a nemesis can reach.
+#        Default:     5
+#
+
+NemesisSystem.MaxRank = 5
+
+#
+#    NemesisSystem.VisualAuraSpell
+#        Description: Optional aura spell applied to active nemeses.
+#                     Set to 0 to disable the visual aura.
+#        Default:     0
+#
+
+NemesisSystem.VisualAuraSpell = 0
+
+#
+#    NemesisSystem.TrivialKillLevelDelta
+#        Description: If the killer is this many or more levels below the victim,
+#                     the kill is treated as trivial and no nemesis is created.
+#        Default:     5
+#
+
+NemesisSystem.TrivialKillLevelDelta = 5
