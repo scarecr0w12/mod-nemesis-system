@@ -1,4 +1,6 @@
 #include "AllCreatureScript.h"
+#include "Chat.h"
+#include "CommandScript.h"
 #include "Config.h"
 #include "Creature.h"
 #include "DatabaseEnv.h"
@@ -8,14 +10,17 @@
 #include "ObjectGuid.h"
 #include "Player.h"
 #include "Random.h"
-#include "Player.h"
 #include "ScriptMgr.h"
 #include "UnitScript.h"
+#include "WorldSessionMgr.h"
 
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <sstream>
 #include <unordered_map>
+
+using namespace Acore::ChatCommands;
 
 namespace
 {
@@ -83,6 +88,21 @@ namespace
         return sConfigMgr->GetOption<uint32>(revenge ? "NemesisSystem.RevengeRewardGold" : "NemesisSystem.BountyRewardGold", revenge ? 10000 : 2500);
     }
 
+    bool ShouldAnnounceCreate()
+    {
+        return sConfigMgr->GetOption<bool>("NemesisSystem.AnnounceOnCreate", true);
+    }
+
+    bool ShouldAnnounceKill()
+    {
+        return sConfigMgr->GetOption<bool>("NemesisSystem.AnnounceOnKill", true);
+    }
+
+    uint8 GetAnnounceMinRank()
+    {
+        return std::max<uint8>(1, sConfigMgr->GetOption<uint8>("NemesisSystem.AnnounceMinRank", 1));
+    }
+
     uint32 GetVisualAuraSpell()
     {
         return sConfigMgr->GetOption<uint32>("NemesisSystem.VisualAuraSpell", 0);
@@ -135,6 +155,40 @@ namespace
     float GetSwiftAttackTimeMultiplier()
     {
         return 0.70f;
+    }
+
+    std::string GetAffixList(uint32 affixMask)
+    {
+        std::ostringstream stream;
+        bool first = true;
+
+        auto append = [&](char const* name)
+        {
+            if (!first)
+                stream << ", ";
+
+            stream << name;
+            first = false;
+        };
+
+        if (affixMask & NEMESIS_AFFIX_VAMPIRIC)
+            append("Vampiric");
+
+        if (affixMask & NEMESIS_AFFIX_SWIFT)
+            append("Swift");
+
+        if (affixMask & NEMESIS_AFFIX_JUGGERNAUT)
+            append("Juggernaut");
+
+        if (first)
+            return "None";
+
+        return stream.str();
+    }
+
+    void BroadcastNemesisMessage(std::string const& message)
+    {
+        sWorldSessionMgr->SendServerMessage(SERVER_MSG_STRING, message);
     }
 
     bool IsExpired(NemesisState const& state)
@@ -294,24 +348,55 @@ namespace
         state.affixMask = affixMask;
     }
 
-    void ApplyJuggernautImmunity(Creature* creature)
+    void ApplyJuggernautImmunity(Creature* creature, bool apply)
     {
         uint32 const placeholderId = 0;
 
-        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_SNARE, true);
-        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_ROOT, true);
-        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_FEAR, true);
-        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_STUN, true);
-        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_SLEEP, true);
-        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_CHARM, true);
-        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_SAPPED, true);
-        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_POLYMORPH, true);
-        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_DISORIENTED, true);
-        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_FREEZE, true);
-        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_HORROR, true);
-        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_BANISH, true);
-        creature->ApplySpellImmune(placeholderId, IMMUNITY_EFFECT, SPELL_EFFECT_KNOCK_BACK, true);
-        creature->ApplySpellImmune(placeholderId, IMMUNITY_EFFECT, SPELL_EFFECT_KNOCK_BACK_DEST, true);
+        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_SNARE, apply);
+        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_ROOT, apply);
+        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_FEAR, apply);
+        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_STUN, apply);
+        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_SLEEP, apply);
+        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_CHARM, apply);
+        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_SAPPED, apply);
+        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_POLYMORPH, apply);
+        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_DISORIENTED, apply);
+        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_FREEZE, apply);
+        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_HORROR, apply);
+        creature->ApplySpellImmune(placeholderId, IMMUNITY_MECHANIC, MECHANIC_BANISH, apply);
+        creature->ApplySpellImmune(placeholderId, IMMUNITY_EFFECT, SPELL_EFFECT_KNOCK_BACK, apply);
+        creature->ApplySpellImmune(placeholderId, IMMUNITY_EFFECT, SPELL_EFFECT_KNOCK_BACK_DEST, apply);
+    }
+
+    void ResetCreatureToBaseState(Creature* creature, NemesisState const& state)
+    {
+        if (!creature)
+            return;
+
+        creature->SetObjectScale(state.baseScale);
+        creature->SetCreateHealth(state.baseHealth);
+        creature->SetStatFlatModifier(UNIT_MOD_HEALTH, BASE_VALUE, float(state.baseHealth));
+        creature->SetMaxHealth(state.baseHealth);
+        creature->SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, state.baseMeleeMinDamage, 0);
+        creature->SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, state.baseMeleeMaxDamage, 0);
+        creature->SetBaseWeaponDamage(OFF_ATTACK, MINDAMAGE, state.baseMeleeMinDamage, 0);
+        creature->SetBaseWeaponDamage(OFF_ATTACK, MAXDAMAGE, state.baseMeleeMaxDamage, 0);
+        creature->SetBaseWeaponDamage(RANGED_ATTACK, MINDAMAGE, state.baseRangedMinDamage, 0);
+        creature->SetBaseWeaponDamage(RANGED_ATTACK, MAXDAMAGE, state.baseRangedMaxDamage, 0);
+        creature->SetAttackTime(BASE_ATTACK, state.baseAttackTime);
+        creature->SetAttackTime(OFF_ATTACK, state.baseAttackTime);
+        creature->SetAttackTime(RANGED_ATTACK, state.baseRangeAttackTime);
+        creature->SetSpeedRate(MOVE_RUN, state.baseRunSpeedRate);
+        creature->UpdateSpeed(MOVE_RUN, true);
+        ApplyJuggernautImmunity(creature, false);
+
+        if (uint32 auraSpell = GetVisualAuraSpell())
+            creature->RemoveAurasDueToSpell(auraSpell);
+
+        creature->UpdateAllStats();
+
+        if (creature->IsAlive())
+            creature->SetFullHealth();
     }
 
     bool IsRevengeKill(Player* killer, NemesisState const& state)
@@ -413,7 +498,7 @@ namespace
         }
 
         if (HasAffix(state, NEMESIS_AFFIX_JUGGERNAUT))
-            ApplyJuggernautImmunity(creature);
+            ApplyJuggernautImmunity(creature, true);
 
         creature->UpdateAllStats();
         creature->SetMaxHealth(scaledHealth);
@@ -431,7 +516,9 @@ namespace
     void PromoteNemesis(Creature* killer, Player* killed)
     {
         NemesisState state;
-        if (TryGetNemesisState(killer->GetSpawnId(), state))
+        bool const existed = TryGetNemesisState(killer->GetSpawnId(), state);
+
+        if (existed)
         {
             if (state.rank < GetMaxRank())
                 ++state.rank;
@@ -444,6 +531,14 @@ namespace
         SaveNemesisState(killer, state);
         ApplyNemesisState(killer, state);
         killer->SetFullHealth();
+
+        if (ShouldAnnounceCreate() && state.rank >= GetAnnounceMinRank())
+        {
+            std::string message = existed
+                ? Acore::StringFormat("[Nemesis]: {} has reached rank {}. Affixes: {}.", killer->GetName(), state.rank, GetAffixList(state.affixMask))
+                : Acore::StringFormat("[Nemesis]: {} has become a nemesis after slaying {}. Affixes: {}.", killer->GetName(), killed->GetName(), GetAffixList(state.affixMask));
+            BroadcastNemesisMessage(message);
+        }
     }
 }
 
@@ -469,7 +564,16 @@ public:
         if (!TryGetNemesisState(killed->GetSpawnId(), state))
             return;
 
-        GrantReward(killer, IsRevengeKill(killer, state));
+        bool const revenge = IsRevengeKill(killer, state);
+        GrantReward(killer, revenge);
+
+        if (ShouldAnnounceKill() && state.rank >= GetAnnounceMinRank())
+        {
+            std::string message = revenge
+                ? Acore::StringFormat("[Nemesis]: {} claimed revenge on {} at rank {}.", killer->GetName(), killed->GetName(), state.rank)
+                : Acore::StringFormat("[Nemesis]: {} claimed the bounty on {} at rank {}.", killer->GetName(), killed->GetName(), state.rank);
+            BroadcastNemesisMessage(message);
+        }
     }
 
     void OnPlayerCreatureKilledByPet(Player* owner, Creature* killed) override
@@ -532,9 +636,132 @@ public:
     }
 };
 
+class NemesisSystemCommandScript : public CommandScript
+{
+public:
+    NemesisSystemCommandScript() : CommandScript("NemesisSystemCommandScript") { }
+
+    ChatCommandTable GetCommands() const override
+    {
+        static ChatCommandTable nemesisTable =
+        {
+            { "debug", HandleDebug, SEC_GAMEMASTER, Console::No },
+            { "mark", HandleMark, SEC_GAMEMASTER, Console::No },
+            { "clear", HandleClear, SEC_GAMEMASTER, Console::No },
+            { "clearall", HandleClearAll, SEC_ADMINISTRATOR, Console::Yes },
+            { "reload", HandleReload, SEC_ADMINISTRATOR, Console::Yes }
+        };
+
+        static ChatCommandTable commandTable =
+        {
+            { "nemesis", nemesisTable }
+        };
+
+        return commandTable;
+    }
+
+    static bool HandleDebug(ChatHandler* handler)
+    {
+        Creature* target = handler->getSelectedCreature();
+        if (!target)
+        {
+            handler->PSendSysMessage("You must select a creature.");
+            return true;
+        }
+
+        handler->PSendSysMessage("Nemesis target: {} (entry {}, spawn {}, map {})", target->GetName(), target->GetEntry(), uint64(target->GetSpawnId()), target->GetMapId());
+
+        NemesisState state;
+        if (!TryGetNemesisState(target->GetSpawnId(), state))
+        {
+            handler->PSendSysMessage("Selected creature is not an active nemesis.");
+            return true;
+        }
+
+        handler->PSendSysMessage("Rank {} | Affixes {} | TargetGuid {}", state.rank, GetAffixList(state.affixMask), state.targetGuid);
+        handler->PSendSysMessage("Health {} / {} | Scale {}", target->GetHealth(), target->GetMaxHealth(), target->GetObjectScale());
+        handler->PSendSysMessage("Main damage {} - {}", target->GetWeaponDamageRange(BASE_ATTACK, MINDAMAGE), target->GetWeaponDamageRange(BASE_ATTACK, MAXDAMAGE));
+        return true;
+    }
+
+    static bool HandleMark(ChatHandler* handler, const std::vector<std::string>& args)
+    {
+        Creature* target = handler->getSelectedCreature();
+        Player* player = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
+        if (!target || !player)
+        {
+            handler->PSendSysMessage("You must select a creature while logged in as a player.");
+            return true;
+        }
+
+        NemesisState state;
+        if (!TryGetNemesisState(target->GetSpawnId(), state))
+            state = BuildInitialNemesisState(target, player);
+
+        uint8 rank = state.rank;
+        if (!args.empty())
+            rank = std::clamp<uint8>(uint8(std::stoi(args[0])), 1, GetMaxRank());
+        else if (rank < GetMaxRank())
+            ++rank;
+
+        state.rank = rank;
+        state.targetGuid = player->GetGUID().GetCounter();
+        RollAffixes(state);
+        SaveNemesisState(target, state);
+        ApplyNemesisState(target, state);
+        target->SetFullHealth();
+        handler->PSendSysMessage("Marked {} as nemesis rank {} with affixes {}.", target->GetName(), state.rank, GetAffixList(state.affixMask));
+        return true;
+    }
+
+    static bool HandleClear(ChatHandler* handler)
+    {
+        Creature* target = handler->getSelectedCreature();
+        if (!target)
+        {
+            handler->PSendSysMessage("You must select a creature.");
+            return true;
+        }
+
+        NemesisState state;
+        if (!TryGetNemesisState(target->GetSpawnId(), state))
+        {
+            handler->PSendSysMessage("Selected creature is not an active nemesis.");
+            return true;
+        }
+
+        ResetCreatureToBaseState(target, state);
+        DeleteNemesisState(target->GetSpawnId());
+        handler->PSendSysMessage("Cleared nemesis state from {}.", target->GetName());
+        return true;
+    }
+
+    static bool HandleClearAll(ChatHandler* handler)
+    {
+        EnsureCacheLoaded();
+        ActiveNemeses.clear();
+        CharacterDatabase.Execute("DELETE FROM `character_nemesis`");
+        handler->PSendSysMessage("Cleared all stored nemesis records.");
+        return true;
+    }
+
+    static bool HandleReload(ChatHandler* handler)
+    {
+        if (!sConfigMgr->LoadModulesConfigs(true, false))
+        {
+            handler->PSendSysMessage("Nemesis System configuration reload failed.");
+            return true;
+        }
+
+        handler->PSendSysMessage("Nemesis System configuration reloaded.");
+        return true;
+    }
+};
+
 void AddSC_mod_nemesis_system()
 {
     new NemesisSystemPlayerScript();
     new NemesisSystemAllCreatureScript();
     new NemesisSystemUnitScript();
+    new NemesisSystemCommandScript();
 }
