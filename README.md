@@ -11,12 +11,14 @@ This scaffold implements the first vertical slice:
 
 - player-death trigger using `OnPlayerKilledByCreature`
 - persistent `character_nemesis` storage in the characters database
-- rank-based size and health scaling
+- rank-based size, health, and melee/ranged damage scaling
+- affix rolling with runtime behavior hooks
 - re-application on `OnCreatureAddWorld`
 - cleanup when a tracked nemesis dies
+- decay for stale nemesis records
+- direct revenge and bounty rewards on kill
 
-Affixes, loot, anti-exploit cooldowns, and announcements are intentionally left
-for follow-up work.
+Anti-exploit cooldowns and announcements are still follow-up work.
 
 ## Files
 
@@ -36,12 +38,21 @@ for follow-up work.
 
 - Nemeses only spawn from non-instance, non-battleground, non-raid kills.
 - Only DB-backed creature spawns are eligible.
-- Initial ranks affect size and health only.
+- Critters, pets, dungeon bosses, world bosses, and sanctuary deaths are excluded.
+- Initial ranks affect size, health, and weapon damage.
+- Rank 1 rolls one affix. Rank 3+ rolls a second affix.
+- Implemented affixes: `Vampiric`, `Swift`, `Juggernaut`.
 - The original victim is stored as the current nemesis target.
+- Base creature stats are persisted so scaling stays stable across restarts and reloads.
+
+## Rewards
+
+- Revenge reward: granted when the original nemesis target or a member of their party kills the nemesis.
+- Bounty reward: granted to other players who kill the nemesis.
+- Rewards are configurable as direct item and gold grants.
 
 ## Next Steps
 
-1. Add affix selection and affix execution.
-2. Add reward distribution and revenge credit.
-3. Add decay timers and anti-feed cooldowns.
-4. Integrate with announcements and optional autobalance hooks.
+1. Add additional affixes and spell-driven visuals.
+2. Add anti-feed cooldowns and decay cleanup polish.
+3. Integrate with announcements and optional autobalance hooks.

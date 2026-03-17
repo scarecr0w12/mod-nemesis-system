@@ -22,6 +22,65 @@ NemesisSystem.Enable = 1
 NemesisSystem.MaxRank = 5
 
 #
+#    NemesisSystem.DecayHours
+#        Description: Deletes inactive nemesis state after this many hours.
+#                     Set to 0 to disable decay.
+#        Default:     48
+#
+
+NemesisSystem.DecayHours = 48
+
+#
+#    NemesisSystem.RevengeRewardItem
+#        Description: Optional item reward granted when the original target or
+#                     their party kills the nemesis.
+#        Default:     0 - disabled
+#
+
+NemesisSystem.RevengeRewardItem = 0
+
+#
+#    NemesisSystem.RevengeRewardCount
+#        Description: Count for the revenge reward item.
+#        Default:     1
+#
+
+NemesisSystem.RevengeRewardCount = 1
+
+#
+#    NemesisSystem.RevengeRewardGold
+#        Description: Gold reward in copper for revenge kills.
+#        Default:     10000
+#
+
+NemesisSystem.RevengeRewardGold = 10000
+
+#
+#    NemesisSystem.BountyRewardItem
+#        Description: Optional item reward granted when another player kills a
+#                     nemesis that targets someone else.
+#        Default:     0 - disabled
+#
+
+NemesisSystem.BountyRewardItem = 0
+
+#
+#    NemesisSystem.BountyRewardCount
+#        Description: Count for the bounty reward item.
+#        Default:     1
+#
+
+NemesisSystem.BountyRewardCount = 1
+
+#
+#    NemesisSystem.BountyRewardGold
+#        Description: Gold reward in copper for bounty kills.
+#        Default:     2500
+#
+
+NemesisSystem.BountyRewardGold = 2500
+
+#
 #    NemesisSystem.VisualAuraSpell
 #        Description: Optional aura spell applied to active nemeses.
 #                     Set to 0 to disable the visual aura.
