@@ -81,6 +81,32 @@ NemesisSystem.BountyRewardCount = 1
 NemesisSystem.BountyRewardGold = 2500
 
 #
+#    NemesisSystem.AnnounceOnCreate
+#        Description: Broadcast nemesis creation and rank-up announcements.
+#        Default:     1 - enabled
+#                     0 - disabled
+#
+
+NemesisSystem.AnnounceOnCreate = 1
+
+#
+#    NemesisSystem.AnnounceOnKill
+#        Description: Broadcast nemesis kill announcements.
+#        Default:     1 - enabled
+#                     0 - disabled
+#
+
+NemesisSystem.AnnounceOnKill = 1
+
+#
+#    NemesisSystem.AnnounceMinRank
+#        Description: Minimum nemesis rank required before announcements are sent.
+#        Default:     1
+#
+
+NemesisSystem.AnnounceMinRank = 1
+
+#
 #    NemesisSystem.VisualAuraSpell
 #        Description: Optional aura spell applied to active nemeses.
 #                     Set to 0 to disable the visual aura.

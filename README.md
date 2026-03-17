@@ -17,6 +17,8 @@ This scaffold implements the first vertical slice:
 - cleanup when a tracked nemesis dies
 - decay for stale nemesis records
 - direct revenge and bounty rewards on kill
+- GM commands for testing and state control
+- configurable world announcements for creation, rank-up, and kill events
 
 Anti-exploit cooldowns and announcements are still follow-up work.
 
@@ -50,6 +52,14 @@ Anti-exploit cooldowns and announcements are still follow-up work.
 - Revenge reward: granted when the original nemesis target or a member of their party kills the nemesis.
 - Bounty reward: granted to other players who kill the nemesis.
 - Rewards are configurable as direct item and gold grants.
+
+## GM Commands
+
+- `.nemesis debug`: inspect the selected creature
+- `.nemesis mark [rank]`: create or set a nemesis on the selected creature
+- `.nemesis clear`: clear the selected creature's nemesis state
+- `.nemesis clearall`: clear all stored nemesis records
+- `.nemesis reload`: reload module config
 
 ## Next Steps
 
