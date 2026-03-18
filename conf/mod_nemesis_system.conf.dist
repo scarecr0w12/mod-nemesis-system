@@ -22,6 +22,85 @@ NemesisSystem.Enable = 1
 NemesisSystem.MaxRank = 5
 
 #
+#    NemesisSystem.MinCreatureLevel
+#        Description: Minimum creature level eligible to become a nemesis.
+#        Default:     1
+#
+
+NemesisSystem.MinCreatureLevel = 1
+
+#
+#    NemesisSystem.MaxCreatureLevel
+#        Description: Maximum creature level eligible to become a nemesis.
+#        Default:     255
+#
+
+NemesisSystem.MaxCreatureLevel = 255
+
+#
+#    NemesisSystem.AllowNormal
+#        Description: Allow normal-rank creatures to become nemeses.
+#        Default:     1 - enabled
+#                     0 - disabled
+#
+
+NemesisSystem.AllowNormal = 1
+
+#
+#    NemesisSystem.AllowElite
+#        Description: Allow elite-rank creatures to become nemeses.
+#        Default:     1 - enabled
+#                     0 - disabled
+#
+
+NemesisSystem.AllowElite = 1
+
+#
+#    NemesisSystem.AllowRare
+#        Description: Allow rare-rank creatures to become nemeses.
+#        Default:     1 - enabled
+#                     0 - disabled
+#
+
+NemesisSystem.AllowRare = 1
+
+#
+#    NemesisSystem.AllowRareElite
+#        Description: Allow rare-elite creatures to become nemeses.
+#        Default:     1 - enabled
+#                     0 - disabled
+#
+
+NemesisSystem.AllowRareElite = 1
+
+#
+#    NemesisSystem.AllowWorldBoss
+#        Description: Allow world-boss rank creatures to become nemeses.
+#                     Dungeon and scripted bosses are still filtered separately.
+#        Default:     0 - disabled
+#
+
+NemesisSystem.AllowWorldBoss = 0
+
+#
+#    NemesisSystem.RankUpCooldownSeconds
+#        Description: Minimum time in seconds before the same creature can gain
+#                     another nemesis promotion.
+#        Default:     300
+#
+
+NemesisSystem.RankUpCooldownSeconds = 300
+
+#
+#    NemesisSystem.SameVictimCooldownSeconds
+#        Description: Minimum time in seconds before the same player can feed
+#                     another promotion to the same creature.
+#        Default:     900
+#
+
+NemesisSystem.SameVictimCooldownSeconds = 900
+
+#
 #    NemesisSystem.DecayHours
 #        Description: Deletes inactive nemesis state after this many hours.
 #                     Set to 0 to disable decay.
@@ -48,12 +127,28 @@ NemesisSystem.RevengeRewardItem = 0
 NemesisSystem.RevengeRewardCount = 1
 
 #
+#    NemesisSystem.RevengeRewardItemPerRankBonus
+#        Description: Additional item count granted per rank above rank 1.
+#        Default:     0
+#
+
+NemesisSystem.RevengeRewardItemPerRankBonus = 0
+
+#
 #    NemesisSystem.RevengeRewardGold
 #        Description: Gold reward in copper for revenge kills.
 #        Default:     10000
 #
 
 NemesisSystem.RevengeRewardGold = 10000
+
+#
+#    NemesisSystem.RevengeRewardGoldPerRankBonus
+#        Description: Additional copper granted per rank above rank 1.
+#        Default:     2500
+#
+
+NemesisSystem.RevengeRewardGoldPerRankBonus = 2500
 
 #
 #    NemesisSystem.BountyRewardItem
@@ -73,12 +168,60 @@ NemesisSystem.BountyRewardItem = 0
 NemesisSystem.BountyRewardCount = 1
 
 #
+#    NemesisSystem.BountyRewardItemPerRankBonus
+#        Description: Additional item count granted per rank above rank 1.
+#        Default:     0
+#
+
+NemesisSystem.BountyRewardItemPerRankBonus = 0
+
+#
 #    NemesisSystem.BountyRewardGold
 #        Description: Gold reward in copper for bounty kills.
 #        Default:     2500
 #
 
 NemesisSystem.BountyRewardGold = 2500
+
+#
+#    NemesisSystem.BountyRewardGoldPerRankBonus
+#        Description: Additional copper granted per rank above rank 1.
+#        Default:     500
+#
+
+NemesisSystem.BountyRewardGoldPerRankBonus = 500
+
+#
+#    NemesisSystem.EnragedHealthPctThreshold
+#        Description: Health percentage at or below which the Enraged affix becomes active.
+#        Default:     30.0
+#
+
+NemesisSystem.EnragedHealthPctThreshold = 30.0
+
+#
+#    NemesisSystem.EnragedDamageMultiplier
+#        Description: Damage multiplier applied while the Enraged affix is active.
+#        Default:     1.50
+#
+
+NemesisSystem.EnragedDamageMultiplier = 1.50
+
+#
+#    NemesisSystem.RegenerationIntervalMs
+#        Description: Tick interval in milliseconds for the Regenerating affix.
+#        Default:     5000
+#
+
+NemesisSystem.RegenerationIntervalMs = 5000
+
+#
+#    NemesisSystem.RegenerationHealthPct
+#        Description: Percent of max health restored each regeneration tick.
+#        Default:     3.0
+#
+
+NemesisSystem.RegenerationHealthPct = 3.0
 
 #
 #    NemesisSystem.AnnounceOnCreate
