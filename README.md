@@ -19,8 +19,7 @@ This scaffold implements the first vertical slice:
 - direct revenge and bounty rewards on kill
 - GM commands for testing and state control
 - configurable world announcements for creation, rank-up, and kill events
-
-Anti-exploit cooldowns and announcements are still follow-up work.
+- anti-feed cooldowns for repeated promotions and same-victim farming
 
 ## Files
 
@@ -106,5 +105,5 @@ Reward scaling config:
 ## Next Steps
 
 1. Add additional affixes and spell-driven visuals.
-2. Add decay cleanup polish.
-3. Integrate with announcements and optional autobalance hooks.
+2. Add richer reward presentation and optional reward messaging.
+3. Integrate with optional autobalance hooks.
