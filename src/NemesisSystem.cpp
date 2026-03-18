@@ -85,9 +85,29 @@ namespace
         return std::max(GetMinCreatureLevel(), sConfigMgr->GetOption<uint8>("NemesisSystem.MaxCreatureLevel", 255));
     }
 
+    uint8 GetPromotionLevelDiffMax()
+    {
+        return sConfigMgr->GetOption<uint8>("NemesisSystem.PromotionLevelDiffMax", 5);
+    }
+
     uint8 GetTrivialKillLevelDelta()
     {
         return sConfigMgr->GetOption<uint8>("NemesisSystem.TrivialKillLevelDelta", 5);
+    }
+
+    uint8 GetRewardOverlevelDiffMax()
+    {
+        return sConfigMgr->GetOption<uint8>("NemesisSystem.RewardOverlevelDiffMax", 10);
+    }
+
+    uint8 GetRewardUnderlevelDiffMax()
+    {
+        return sConfigMgr->GetOption<uint8>("NemesisSystem.RewardUnderlevelDiffMax", 10);
+    }
+
+    float GetRewardUnderdogMaxMultiplier()
+    {
+        return std::max(1.0f, sConfigMgr->GetOption<float>("NemesisSystem.RewardUnderdogMaxMultiplier", 2.0f));
     }
 
     uint32 GetDecayHours()
@@ -582,16 +602,121 @@ namespace
         return group->IsMember(ObjectGuid::Create<HighGuid::Player>(state.targetGuid));
     }
 
-    void GrantReward(Player* player, bool revenge, uint8 rank)
+    struct RewardRecipients
+    {
+        std::vector<Player*> players;
+        uint8 highestLevel = 0;
+    };
+
+    RewardRecipients CollectRewardRecipients(Player* killer, Creature* killed)
+    {
+        RewardRecipients recipients;
+        if (!killer || !killed)
+            return recipients;
+
+        auto addRecipient = [&](Player* player)
+        {
+            if (!player)
+                return;
+
+            recipients.players.push_back(player);
+            recipients.highestLevel = std::max<uint8>(recipients.highestLevel, player->GetLevel());
+        };
+
+        Group* group = killer->GetGroup();
+        if (!group)
+        {
+            addRecipient(killer);
+            return recipients;
+        }
+
+        for (GroupReference* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
+        {
+            Player* member = itr->GetSource();
+            if (!member)
+                continue;
+
+            if (member != killer)
+            {
+                if (member->HasCorpse())
+                    continue;
+
+                if (!member->IsAtGroupRewardDistance(killed))
+                    continue;
+            }
+
+            addRecipient(member);
+        }
+
+        if (recipients.players.empty())
+            addRecipient(killer);
+
+        return recipients;
+    }
+
+    float GetRewardMultiplier(uint8 creatureLevel, uint8 referenceLevel)
+    {
+        int32 const levelDiff = int32(referenceLevel) - int32(creatureLevel);
+        if (levelDiff > 0)
+        {
+            uint8 const maxDiff = GetRewardOverlevelDiffMax();
+            if (!maxDiff)
+                return 0.0f;
+
+            float const multiplier = 1.0f - (float(levelDiff) / float(maxDiff));
+            return std::clamp(multiplier, 0.0f, 1.0f);
+        }
+
+        if (levelDiff < 0)
+        {
+            uint8 const maxDiff = GetRewardUnderlevelDiffMax();
+            float const maxMultiplier = GetRewardUnderdogMaxMultiplier();
+            if (!maxDiff || maxMultiplier <= 1.0f)
+                return 1.0f;
+
+            uint32 const underlevelDiff = uint32(-levelDiff);
+            float const progress = float(std::min<uint32>(underlevelDiff, maxDiff)) / float(maxDiff);
+            return 1.0f + ((maxMultiplier - 1.0f) * progress);
+        }
+
+        return 1.0f;
+    }
+
+    uint32 GetScaledItemCount(uint32 baseCount, float multiplier)
+    {
+        if (!baseCount || multiplier <= 0.0f)
+            return 0;
+
+        float const scaledCount = float(baseCount) * multiplier;
+        uint32 scaledItems = uint32(scaledCount);
+        float const fractional = scaledCount - float(scaledItems);
+
+        if (fractional > 0.0f && frand(0.0f, 1.0f) < fractional)
+            ++scaledItems;
+
+        return scaledItems;
+    }
+
+    uint32 GetScaledGold(uint32 baseGold, float multiplier)
+    {
+        if (!baseGold || multiplier <= 0.0f)
+            return 0;
+
+        return uint32((float(baseGold) * multiplier) + 0.5f);
+    }
+
+    void GrantReward(Player* player, bool revenge, uint8 rank, float rewardMultiplier)
     {
         if (!player)
             return;
 
         uint32 const rankBonusSteps = rank > 0 ? uint32(rank - 1) : 0;
-        uint32 const itemCount = GetRewardCount(revenge) + (GetRewardItemPerRankBonus(revenge) * rankBonusSteps);
-        uint32 const gold = GetRewardGold(revenge) + (GetRewardGoldPerRankBonus(revenge) * rankBonusSteps);
+        uint32 const baseItemCount = GetRewardCount(revenge) + (GetRewardItemPerRankBonus(revenge) * rankBonusSteps);
+        uint32 const itemCount = GetScaledItemCount(baseItemCount, rewardMultiplier);
+        uint32 const baseGold = GetRewardGold(revenge) + (GetRewardGoldPerRankBonus(revenge) * rankBonusSteps);
+        uint32 const gold = GetScaledGold(baseGold, rewardMultiplier);
 
-        if (uint32 itemId = GetRewardItem(revenge))
+        if (uint32 itemId = GetRewardItem(revenge); itemId && itemCount)
             player->AddItem(itemId, itemCount);
 
         if (gold)
@@ -617,6 +742,13 @@ namespace
             return false;
 
         if (killer->GetLevel() < GetMinCreatureLevel() || killer->GetLevel() > GetMaxCreatureLevel())
+            return false;
+
+        int32 levelDiff = int32(killer->GetLevel()) - int32(killed->GetLevel());
+        if (levelDiff < 0)
+            levelDiff = -levelDiff;
+
+        if (levelDiff > GetPromotionLevelDiffMax())
             return false;
 
         if (!IsAllowedCreatureRank(killer->GetCreatureTemplate()->rank))
@@ -769,7 +901,12 @@ public:
             return;
 
         bool const revenge = IsRevengeKill(killer, state);
-        GrantReward(killer, revenge, state.rank);
+        RewardRecipients const recipients = CollectRewardRecipients(killer, killed);
+        float const rewardMultiplier = GetRewardMultiplier(killed->GetLevel(), recipients.highestLevel);
+
+        if (rewardMultiplier > 0.0f)
+            for (Player* recipient : recipients.players)
+                GrantReward(recipient, revenge, state.rank, rewardMultiplier);
 
         if (ShouldAnnounceKill() && state.rank >= GetAnnounceMinRank())
         {

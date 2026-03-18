@@ -41,7 +41,7 @@ Anti-exploit cooldowns and announcements are still follow-up work.
 - Nemeses only spawn from non-instance, non-battleground, non-raid kills.
 - Only DB-backed creature spawns are eligible.
 - Critters, pets, dungeon bosses, world bosses, and sanctuary deaths are excluded.
-- Creature eligibility is configurable by absolute creature level and rank type.
+- Creature eligibility is configurable by absolute creature level, rank type, and player-versus-creature level windows.
 - Initial ranks affect size, health, and weapon damage.
 - Rank 1 rolls one affix. Rank 3+ rolls a second affix.
 - Implemented affixes: `Vampiric`, `Swift`, `Juggernaut`, `Savage`, `Spellward`, `Enraged`, `Regenerating`.
@@ -63,6 +63,8 @@ Additional affix behavior:
 - `NemesisSystem.AllowRare`
 - `NemesisSystem.AllowRareElite`
 - `NemesisSystem.AllowWorldBoss`
+- `NemesisSystem.PromotionLevelDiffMax`
+- `NemesisSystem.TrivialKillLevelDelta`
 
 ## Anti-Feed Config
 
@@ -76,7 +78,18 @@ Anti-feed cooldown state is now persisted with each nemesis record, so cooldowns
 - Revenge reward: granted when the original nemesis target or a member of their party kills the nemesis.
 - Bounty reward: granted to other players who kill the nemesis.
 - Rewards are configurable as direct item and gold grants.
-- Item and gold rewards can scale upward by nemesis rank.
+- Item and gold rewards scale upward by nemesis rank.
+- Rewards are granted to every eligible nearby party member, using AzerothCore's group reward distance.
+- Reward scaling is based on the highest level among eligible nearby recipients.
+- Overleveled kills scale rewards down linearly to zero.
+- Underdog kills scale rewards up linearly to a configurable maximum multiplier.
+- Gold scales directly, while item rewards are converted into chance-based rolls.
+
+Reward scaling config:
+
+- `NemesisSystem.RewardOverlevelDiffMax`
+- `NemesisSystem.RewardUnderlevelDiffMax`
+- `NemesisSystem.RewardUnderdogMaxMultiplier`
 
 ## GM Commands
 
