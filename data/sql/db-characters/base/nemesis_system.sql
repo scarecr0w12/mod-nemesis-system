@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS `character_nemesis` (
     `base_range_attack_time` int unsigned NOT NULL COMMENT 'Base ranged attack time before affix scaling',
     `base_run_speed_rate` float NOT NULL COMMENT 'Base run speed rate before affix scaling',
     `nemesis_target_guid` int unsigned NOT NULL COMMENT 'Player guid that created the nemesis',
+    `last_promotion_at` int unsigned NOT NULL DEFAULT 0 COMMENT 'Last nemesis promotion time as unix timestamp',
+    `last_victim_guid` int unsigned NOT NULL DEFAULT 0 COMMENT 'Last victim guid used for anti-feed cooldowns',
     `creation_date` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`guid`),
     KEY `idx_character_nemesis_target` (`nemesis_target_guid`),
