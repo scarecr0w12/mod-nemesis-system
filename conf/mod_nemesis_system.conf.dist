@@ -275,7 +275,8 @@ NemesisSystem.RegenerationHealthPct = 3.0
 
 #
 #    NemesisSystem.AnnounceOnCreate
-#        Description: Broadcast nemesis creation and rank-up announcements.
+#        Description: Sends nemesis creation and rank-up announcements to the
+#                     nemesis zone. Reaching rank 5 is announced server-wide.
 #        Default:     1 - enabled
 #                     0 - disabled
 #
@@ -284,7 +285,7 @@ NemesisSystem.AnnounceOnCreate = 1
 
 #
 #    NemesisSystem.AnnounceOnKill
-#        Description: Broadcast nemesis kill announcements.
+#        Description: Sends nemesis kill announcements to the nemesis zone.
 #        Default:     1 - enabled
 #                     0 - disabled
 #

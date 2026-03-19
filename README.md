@@ -18,7 +18,7 @@ This scaffold implements the first vertical slice:
 - decay for stale nemesis records
 - direct revenge and bounty rewards on kill
 - GM commands for testing and state control
-- configurable world announcements for creation, rank-up, and kill events
+- configurable announcements for creation, rank-up, and kill events
 - anti-feed cooldowns for repeated promotions and same-victim farming
 
 ## Files
@@ -83,6 +83,12 @@ Anti-feed cooldown state is now persisted with each nemesis record, so cooldowns
 - Overleveled kills scale rewards down linearly to zero.
 - Underdog kills scale rewards up linearly to a configurable maximum multiplier.
 - Gold scales directly, while item rewards are converted into chance-based rolls.
+
+Announcement behavior:
+
+- Create, rank-up, and kill announcements are sent to the nemesis creature's current zone.
+- Rank-up announcements are promoted to server-wide only when a nemesis reaches rank 5.
+- Announcement text includes nemesis location coordinates.
 
 Reward scaling config:
 

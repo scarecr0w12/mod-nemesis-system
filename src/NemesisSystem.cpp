@@ -309,8 +309,30 @@ namespace
         return stream.str();
     }
 
-    void BroadcastNemesisMessage(std::string const& message)
+    std::string GetNemesisCoordinates(Creature const* creature)
     {
+        if (!creature)
+            return "unknown";
+
+        return Acore::StringFormat("{:.1f}, {:.1f}, {:.1f}", creature->GetPositionX(), creature->GetPositionY(), creature->GetPositionZ());
+    }
+
+    void BroadcastNemesisMessage(Creature* creature, std::string const& message, bool serverWide = false)
+    {
+        if (serverWide)
+        {
+            sWorldSessionMgr->SendServerMessage(SERVER_MSG_STRING, message);
+            return;
+        }
+
+        if (creature)
+            if (Map* map = creature->GetMap())
+                if (uint32 zoneId = creature->GetZoneId())
+                {
+                    map->SendZoneText(zoneId, message.c_str());
+                    return;
+                }
+
         sWorldSessionMgr->SendServerMessage(SERVER_MSG_STRING, message);
     }
 
@@ -846,6 +868,7 @@ namespace
     {
         NemesisState state;
         bool const existed = TryGetNemesisState(killer->GetSpawnId(), state);
+        uint8 const previousRank = state.rank;
         uint32 const now = uint32(GameTime::GetGameTime().count());
 
         if (existed)
@@ -870,10 +893,11 @@ namespace
 
         if (ShouldAnnounceCreate() && state.rank >= GetAnnounceMinRank())
         {
+            bool const reachedRankFive = existed && previousRank < 5 && state.rank >= 5;
             std::string message = existed
-                ? Acore::StringFormat("[Nemesis]: {} has reached rank {}. Affixes: {}.", killer->GetName(), state.rank, GetAffixList(state.affixMask))
-                : Acore::StringFormat("[Nemesis]: {} has become a nemesis after slaying {}. Affixes: {}.", killer->GetName(), killed->GetName(), GetAffixList(state.affixMask));
-            BroadcastNemesisMessage(message);
+                ? Acore::StringFormat("[Nemesis]: {} has reached rank {} at ({}). Affixes: {}.", killer->GetName(), state.rank, GetNemesisCoordinates(killer), GetAffixList(state.affixMask))
+                : Acore::StringFormat("[Nemesis]: {} has become a nemesis after slaying {} at ({}). Affixes: {}.", killer->GetName(), killed->GetName(), GetNemesisCoordinates(killer), GetAffixList(state.affixMask));
+            BroadcastNemesisMessage(killer, message, reachedRankFive);
         }
     }
 }
@@ -911,9 +935,9 @@ public:
         if (ShouldAnnounceKill() && state.rank >= GetAnnounceMinRank())
         {
             std::string message = revenge
-                ? Acore::StringFormat("[Nemesis]: {} claimed revenge on {} at rank {}.", killer->GetName(), killed->GetName(), state.rank)
-                : Acore::StringFormat("[Nemesis]: {} claimed the bounty on {} at rank {}.", killer->GetName(), killed->GetName(), state.rank);
-            BroadcastNemesisMessage(message);
+                ? Acore::StringFormat("[Nemesis]: {} claimed revenge on {} at rank {} near ({}).", killer->GetName(), killed->GetName(), state.rank, GetNemesisCoordinates(killed))
+                : Acore::StringFormat("[Nemesis]: {} claimed the bounty on {} at rank {} near ({}).", killer->GetName(), killed->GetName(), state.rank, GetNemesisCoordinates(killed));
+            BroadcastNemesisMessage(killed, message);
         }
     }
 
