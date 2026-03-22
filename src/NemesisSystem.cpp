@@ -108,6 +108,7 @@ namespace
     Creature* FindLoadedCreatureBySpawnId(Map* map, ObjectGuid::LowType spawnId);
     std::string GetNemesisDisplayName(Map* map, ObjectGuid::LowType spawnId, NemesisState const& state);
     void EnsureCacheLoaded();
+    bool IsExpired(NemesisState const& state);
 
     bool IsEnabled()
     {
