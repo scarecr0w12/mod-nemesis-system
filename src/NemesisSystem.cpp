@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <functional>
 #include <sstream>
 #include <vector>
@@ -213,6 +214,21 @@ namespace
         return sConfigMgr->GetOption<uint32>("NemesisSystem.VisualAuraSpell", 0);
     }
 
+    uint32 GetAddonBootstrapRecentHours()
+    {
+        return sConfigMgr->GetOption<uint32>("NemesisSystem.AddonBootstrapRecentHours", 24);
+    }
+
+    uint32 GetAddonBootstrapMaxEntries()
+    {
+        return std::max<uint32>(1, sConfigMgr->GetOption<uint32>("NemesisSystem.AddonBootstrapMaxEntries", 100));
+    }
+
+    uint32 GetAddonReportCooldownSeconds()
+    {
+        return sConfigMgr->GetOption<uint32>("NemesisSystem.AddonReportCooldownSeconds", 30);
+    }
+
     bool HasAffix(NemesisState const& state, NemesisAffix affix)
     {
         return (state.affixMask & affix) != 0;
@@ -362,6 +378,23 @@ namespace
         return value;
     }
 
+    float RoundToNearest(float value, float nearest)
+    {
+        if (nearest <= 0.0f)
+            return value;
+
+        return std::round(value / nearest) * nearest;
+    }
+
+    float RoundToDecimals(float value, uint32 decimals)
+    {
+        float scale = std::pow(10.0f, float(decimals));
+        if (scale <= 0.0f)
+            return value;
+
+        return std::round(value * scale) / scale;
+    }
+
     std::string GetRankTierLabel(uint8 rank)
     {
         switch (rank)
@@ -445,7 +478,7 @@ namespace
 
         for (size_t index = 0; index < chunks.size(); ++index)
         {
-            SendAddonPayload(player, Acore::StringFormat("V1:CHUNK:{}:{}:{}:{}", id, index + 1, chunks.size(), chunks[index]));
+            SendAddonPayload(player, Acore::StringFormat("V2:CHUNK:{}:{}:{}:{}", id, index + 1, chunks.size(), chunks[index]));
         }
     }
 
@@ -567,21 +600,22 @@ namespace
         return view;
     }
 
-    std::string BuildSnapshotEntryPayload(NemesisAddonView const& view)
+    std::string BuildAddonEntryPayload(char const* opcode, NemesisAddonView const& view)
     {
         return Acore::StringFormat(
-            "V1:SNAPSHOT_ENTRY:{}:{}:{}:{}:{}:{}:{:.2f}:{:.2f}:{:.2f}:{:.4f}:{:.4f}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+            "V2:{}:{}:{}:{}:{}:{}:{}:{:.1f}:{:.1f}:{:.1f}:{:.2f}:{:.2f}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+            opcode,
             uint64(view.spawnId),
             view.creatureEntry,
             view.name,
             view.mapId,
             view.zoneId,
             view.zoneName,
-            view.x,
-            view.y,
-            view.z,
-            view.mapX,
-            view.mapY,
+            RoundToNearest(view.x, 5.0f),
+            RoundToNearest(view.y, 5.0f),
+            RoundToNearest(view.z, 5.0f),
+            RoundToDecimals(view.mapX, 2),
+            RoundToDecimals(view.mapY, 2),
             uint32(view.level),
             uint32(view.rank),
             view.rankTier,
@@ -595,32 +629,85 @@ namespace
             view.lastSeenAt);
     }
 
-    std::string BuildUpsertPayload(NemesisAddonView const& view)
+    std::string BuildHelloPayload(uint32 entryCount)
     {
         return Acore::StringFormat(
-            "V1:UPSERT:{}:{}:{}:{}:{}:{}:{:.2f}:{:.2f}:{:.2f}:{:.4f}:{:.4f}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
-            uint64(view.spawnId),
-            view.creatureEntry,
-            view.name,
-            view.mapId,
-            view.zoneId,
-            view.zoneName,
-            view.x,
-            view.y,
-            view.z,
-            view.mapX,
-            view.mapY,
-            uint32(view.level),
-            uint32(view.rank),
-            view.rankTier,
-            view.affixMask,
-            view.affixText,
-            view.targetGuid,
-            view.targetName,
-            view.relation,
-            view.rewardClass,
-            view.threatClass,
-            view.lastSeenAt);
+            "V2:HELLO:bootstrap|report|rank5:{}:{}",
+            entryCount,
+            uint32(GameTime::GetGameTime().count()));
+    }
+
+    std::string BuildRemovePayload(ObjectGuid::LowType spawnId, char const* reason)
+    {
+        return Acore::StringFormat("V2:REMOVE:{}:{}", uint64(spawnId), reason);
+    }
+
+    bool ShouldIncludeNemesisInBootstrap(Player* player, NemesisState const& state)
+    {
+        if (state.rank >= 5)
+            return true;
+
+        if (GetRelationForPlayer(player, state) != "public")
+            return true;
+
+        uint32 const recentHours = GetAddonBootstrapRecentHours();
+        if (!recentHours)
+            return false;
+
+        uint32 const now = uint32(GameTime::GetGameTime().count());
+        uint32 const lastSeenAt = state.lastSeenAt ? state.lastSeenAt : state.createdAt;
+        return lastSeenAt && (lastSeenAt + (recentHours * 60u * 60u) >= now);
+    }
+
+    std::vector<ObjectGuid::LowType> CollectBootstrapSpawnIds(Player* player, bool includeAll = false)
+    {
+        EnsureCacheLoaded();
+
+        struct BootstrapEntry
+        {
+            ObjectGuid::LowType spawnId = 0;
+            uint8 rank = 1;
+            uint32 lastSeenAt = 0;
+        };
+
+        std::vector<BootstrapEntry> matches;
+        matches.reserve(ActiveNemeses.size());
+
+        for (NemesisStore::iterator itr = ActiveNemeses.begin(); itr != ActiveNemeses.end();)
+        {
+            if (IsExpired(itr->second))
+            {
+                CharacterDatabase.Execute("DELETE FROM `character_nemesis` WHERE `guid` = {}", uint64(itr->first));
+                itr = ActiveNemeses.erase(itr);
+                continue;
+            }
+
+            if (includeAll || ShouldIncludeNemesisInBootstrap(player, itr->second))
+                matches.push_back({ itr->first, itr->second.rank, itr->second.lastSeenAt ? itr->second.lastSeenAt : itr->second.createdAt });
+
+            ++itr;
+        }
+
+        std::sort(matches.begin(), matches.end(), [](BootstrapEntry const& left, BootstrapEntry const& right)
+        {
+            if (left.lastSeenAt != right.lastSeenAt)
+                return left.lastSeenAt > right.lastSeenAt;
+
+            if (left.rank != right.rank)
+                return left.rank > right.rank;
+
+            return left.spawnId < right.spawnId;
+        });
+
+        if (!includeAll && matches.size() > GetAddonBootstrapMaxEntries())
+            matches.resize(GetAddonBootstrapMaxEntries());
+
+        std::vector<ObjectGuid::LowType> spawnIds;
+        spawnIds.reserve(matches.size());
+        for (BootstrapEntry const& entry : matches)
+            spawnIds.push_back(entry.spawnId);
+
+        return spawnIds;
     }
 
     void ForEachOnlinePlayer(std::function<void(Player*)> const& callback)
@@ -631,30 +718,47 @@ namespace
                 callback(player);
     }
 
-    void SendNemesisSnapshot(Player* player)
+    void SendNemesisBootstrap(Player* player, bool includeAll = false)
     {
         if (!player)
             return;
 
-        EnsureCacheLoaded();
-        SendAddonPayload(player, Acore::StringFormat("V1:HELLO:waypoint|affixes|threat|reward|guildrel:{}:{}", ActiveNemeses.size(), uint32(GameTime::GetGameTime().count())));
-        SendAddonPayload(player, Acore::StringFormat("V1:SNAPSHOT_BEGIN:{}", ActiveNemeses.size()));
+        std::vector<ObjectGuid::LowType> const spawnIds = CollectBootstrapSpawnIds(player, includeAll);
 
-        for (auto const& [spawnId, state] : ActiveNemeses)
+        SendAddonPayload(player, BuildHelloPayload(spawnIds.size()));
+        SendAddonPayload(player, Acore::StringFormat("V2:BOOTSTRAP_BEGIN:{}:{}", spawnIds.size(), uint32(GameTime::GetGameTime().count())));
+
+        for (ObjectGuid::LowType spawnId : spawnIds)
         {
-            NemesisAddonView const view = BuildAddonView(player, spawnId, state);
-            SendChunkedAddonPayload(player, BuildSnapshotEntryPayload(view));
+            NemesisStore::const_iterator itr = ActiveNemeses.find(spawnId);
+            if (itr == ActiveNemeses.end())
+                continue;
+
+            NemesisAddonView const view = BuildAddonView(player, spawnId, itr->second);
+            SendChunkedAddonPayload(player, BuildAddonEntryPayload("BOOTSTRAP_ENTRY", view));
         }
 
-        SendAddonPayload(player, "V1:SNAPSHOT_END");
+        SendAddonPayload(player, "V2:BOOTSTRAP_END");
     }
 
-    void BroadcastNemesisUpsert(ObjectGuid::LowType spawnId, NemesisState const& state)
+    void SendValidatedNemesisUpsert(Player* player, ObjectGuid::LowType spawnId, NemesisState const& state)
     {
+        if (!player)
+            return;
+
+        NemesisAddonView const view = BuildAddonView(player, spawnId, state);
+        SendChunkedAddonPayload(player, BuildAddonEntryPayload("UPSERT_VALIDATED", view));
+    }
+
+    void BroadcastRankFiveNemesis(ObjectGuid::LowType spawnId, NemesisState const& state)
+    {
+        if (state.rank < 5)
+            return;
+
         ForEachOnlinePlayer([&](Player* player)
         {
             NemesisAddonView const view = BuildAddonView(player, spawnId, state);
-            SendChunkedAddonPayload(player, BuildUpsertPayload(view));
+            SendChunkedAddonPayload(player, BuildAddonEntryPayload("RANK5_BROADCAST", view));
         });
     }
 
@@ -662,7 +766,7 @@ namespace
     {
         ForEachOnlinePlayer([&](Player* player)
         {
-            SendAddonPayload(player, Acore::StringFormat("V1:REMOVE:{}:{}", uint64(spawnId), reason));
+            SendAddonPayload(player, BuildRemovePayload(spawnId, reason));
         });
     }
 
@@ -766,9 +870,9 @@ namespace
         CacheLoaded = true;
 
         QueryResult result = CharacterDatabase.Query(
-            "SELECT `guid`, `creature_entry`, `map_id`, `pos_x`, `pos_y`, `pos_z`, `rank`, `affix_mask`, `base_health`, `base_scale`, `base_melee_min_damage`, "
+            "SELECT `guid`, `creature_entry`, `map_id`, `zone_id`, `pos_x`, `pos_y`, `pos_z`, `rank`, `affix_mask`, `base_health`, `base_scale`, `base_melee_min_damage`, "
             "`base_melee_max_damage`, `base_ranged_min_damage`, `base_ranged_max_damage`, `base_attack_time`, `base_range_attack_time`, `base_run_speed_rate`, `nemesis_target_guid`, `last_promotion_at`, `last_victim_guid`, "
-            "UNIX_TIMESTAMP(`creation_date`) FROM `character_nemesis`");
+            "`last_seen_at`, UNIX_TIMESTAMP(`creation_date`) FROM `character_nemesis`");
         if (!result)
             return;
 
@@ -781,25 +885,29 @@ namespace
             NemesisState state;
             state.creatureEntry = fields[1].Get<uint32>();
             state.mapId = fields[2].Get<uint32>();
-            state.homeX = fields[3].Get<float>();
-            state.homeY = fields[4].Get<float>();
-            state.homeZ = fields[5].Get<float>();
-            state.rank = fields[6].Get<uint8>();
-            state.affixMask = fields[7].Get<uint32>();
-            state.baseHealth = fields[8].Get<uint32>();
-            state.baseScale = fields[9].Get<float>();
-            state.baseMeleeMinDamage = fields[10].Get<float>();
-            state.baseMeleeMaxDamage = fields[11].Get<float>();
-            state.baseRangedMinDamage = fields[12].Get<float>();
-            state.baseRangedMaxDamage = fields[13].Get<float>();
-            state.baseAttackTime = fields[14].Get<uint32>();
-            state.baseRangeAttackTime = fields[15].Get<uint32>();
-            state.baseRunSpeedRate = fields[16].Get<float>();
-            state.targetGuid = fields[17].Get<uint32>();
-            state.lastPromotionAt = fields[18].Get<uint32>();
-            state.lastVictimGuid = fields[19].Get<uint32>();
-            state.createdAt = fields[20].Get<uint32>();
-            state.lastSeenAt = state.createdAt;
+            state.zoneId = fields[3].Get<uint32>();
+            state.homeX = fields[4].Get<float>();
+            state.homeY = fields[5].Get<float>();
+            state.homeZ = fields[6].Get<float>();
+            state.rank = fields[7].Get<uint8>();
+            state.affixMask = fields[8].Get<uint32>();
+            state.baseHealth = fields[9].Get<uint32>();
+            state.baseScale = fields[10].Get<float>();
+            state.baseMeleeMinDamage = fields[11].Get<float>();
+            state.baseMeleeMaxDamage = fields[12].Get<float>();
+            state.baseRangedMinDamage = fields[13].Get<float>();
+            state.baseRangedMaxDamage = fields[14].Get<float>();
+            state.baseAttackTime = fields[15].Get<uint32>();
+            state.baseRangeAttackTime = fields[16].Get<uint32>();
+            state.baseRunSpeedRate = fields[17].Get<float>();
+            state.targetGuid = fields[18].Get<uint32>();
+            state.lastPromotionAt = fields[19].Get<uint32>();
+            state.lastVictimGuid = fields[20].Get<uint32>();
+            state.lastSeenAt = fields[21].Get<uint32>();
+            state.createdAt = fields[22].Get<uint32>();
+
+            if (!state.lastSeenAt)
+                state.lastSeenAt = state.createdAt;
 
             if (IsExpired(state))
             {
@@ -839,25 +947,24 @@ namespace
         EnsureCacheLoaded();
 
         NemesisState storedState = state;
-        float homeX = storedState.homeX;
-        float homeY = storedState.homeY;
-        float homeZ = storedState.homeZ;
-        float orientation = 0.0f;
-        creature->GetHomePosition(homeX, homeY, homeZ, orientation);
+        float const homeX = creature->GetPositionX();
+        float const homeY = creature->GetPositionY();
+        float const homeZ = creature->GetPositionZ();
         storedState.homeX = homeX;
         storedState.homeY = homeY;
         storedState.homeZ = homeZ;
         storedState.zoneId = creature->GetZoneId();
-        storedState.lastSeenAt = uint32(GameTime::GetGameTime().count());
+        storedState.lastSeenAt = storedState.lastSeenAt ? storedState.lastSeenAt : uint32(GameTime::GetGameTime().count());
 
         CharacterDatabase.Execute(
             "REPLACE INTO `character_nemesis` "
-            "(`guid`, `creature_entry`, `map_id`, `pos_x`, `pos_y`, `pos_z`, `rank`, `affix_mask`, `base_health`, `base_scale`, "
-            "`base_melee_min_damage`, `base_melee_max_damage`, `base_ranged_min_damage`, `base_ranged_max_damage`, `base_attack_time`, `base_range_attack_time`, `base_run_speed_rate`, `nemesis_target_guid`, `last_promotion_at`, `last_victim_guid`, `creation_date`) "
-            "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, FROM_UNIXTIME({}))",
+            "(`guid`, `creature_entry`, `map_id`, `zone_id`, `pos_x`, `pos_y`, `pos_z`, `rank`, `affix_mask`, `base_health`, `base_scale`, "
+            "`base_melee_min_damage`, `base_melee_max_damage`, `base_ranged_min_damage`, `base_ranged_max_damage`, `base_attack_time`, `base_range_attack_time`, `base_run_speed_rate`, `nemesis_target_guid`, `last_promotion_at`, `last_victim_guid`, `creation_date`, `last_seen_at`) "
+            "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, FROM_UNIXTIME({}), {})",
             uint64(creature->GetSpawnId()),
             creature->GetEntry(),
             creature->GetMapId(),
+            storedState.zoneId,
             homeX,
             homeY,
             homeZ,
@@ -875,7 +982,8 @@ namespace
             storedState.targetGuid,
             storedState.lastPromotionAt,
             storedState.lastVictimGuid,
-            storedState.createdAt ? storedState.createdAt : uint32(GameTime::GetGameTime().count()));
+            storedState.createdAt ? storedState.createdAt : uint32(GameTime::GetGameTime().count()),
+            storedState.lastSeenAt);
 
         ActiveNemeses[creature->GetSpawnId()] = storedState;
     }
@@ -1265,7 +1373,7 @@ namespace
         SaveNemesisState(killer, state);
         ApplyNemesisState(killer, state);
         killer->SetFullHealth();
-        BroadcastNemesisUpsert(killer->GetSpawnId(), ActiveNemeses[killer->GetSpawnId()]);
+        BroadcastRankFiveNemesis(killer->GetSpawnId(), ActiveNemeses[killer->GetSpawnId()]);
 
         if (ShouldAnnounceCreate() && state.rank >= GetAnnounceMinRank())
         {
@@ -1446,7 +1554,9 @@ public:
     {
         static ChatCommandTable addonTable =
         {
-            { "sync", HandleAddonSync, SEC_PLAYER, Console::No }
+            { "bootstrap", HandleAddonBootstrap, SEC_PLAYER, Console::No },
+            { "report", HandleAddonReport, SEC_PLAYER, Console::No },
+            { "sync", HandleAddonSync, SEC_GAMEMASTER, Console::No }
         };
 
         static ChatCommandTable nemesisTable =
@@ -1471,6 +1581,59 @@ public:
         return commandTable;
     }
 
+    static bool HandleAddonBootstrap(ChatHandler* handler)
+    {
+        Player* player = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
+        if (!player)
+        {
+            handler->PSendSysMessage("You must be logged in as a player to request addon bootstrap data.");
+            return true;
+        }
+
+        SendNemesisBootstrap(player);
+        return true;
+    }
+
+    static bool HandleAddonReport(ChatHandler* handler, uint64 rawSpawnId)
+    {
+        Player* player = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
+        if (!player)
+        {
+            handler->PSendSysMessage("You must be logged in as a player to report addon sightings.");
+            return true;
+        }
+
+        ObjectGuid::LowType const spawnId = ObjectGuid::LowType(rawSpawnId);
+        NemesisState state;
+        if (!TryGetNemesisState(spawnId, state))
+            return true;
+
+        uint32 const now = uint32(GameTime::GetGameTime().count());
+        if (state.lastSeenAt && state.lastSeenAt + GetAddonReportCooldownSeconds() > now)
+            return true;
+
+        state.mapId = player->GetMapId();
+        state.zoneId = player->GetZoneId();
+        state.homeX = player->GetPositionX();
+        state.homeY = player->GetPositionY();
+        state.homeZ = player->GetPositionZ();
+        state.lastSeenAt = now;
+
+        ActiveNemeses[spawnId] = state;
+        CharacterDatabase.Execute(
+            "UPDATE `character_nemesis` SET `map_id` = {}, `zone_id` = {}, `pos_x` = {}, `pos_y` = {}, `pos_z` = {}, `last_seen_at` = {} WHERE `guid` = {}",
+            state.mapId,
+            state.zoneId,
+            state.homeX,
+            state.homeY,
+            state.homeZ,
+            state.lastSeenAt,
+            uint64(spawnId));
+
+        SendValidatedNemesisUpsert(player, spawnId, state);
+        return true;
+    }
+
     static bool HandleAddonSync(ChatHandler* handler)
     {
         Player* player = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
@@ -1480,7 +1643,7 @@ public:
             return true;
         }
 
-        SendNemesisSnapshot(player);
+        SendNemesisBootstrap(player, true);
         return true;
     }
 
@@ -1562,9 +1725,11 @@ public:
         state.rank = rank;
         state.targetGuid = player->GetGUID().GetCounter();
         RollAffixes(state);
+        state.lastSeenAt = uint32(GameTime::GetGameTime().count());
         SaveNemesisState(target, state);
         ApplyNemesisState(target, state);
         target->SetFullHealth();
+        BroadcastRankFiveNemesis(target->GetSpawnId(), ActiveNemeses[target->GetSpawnId()]);
         handler->PSendSysMessage("Marked {} as nemesis rank {} with affixes {}.", target->GetName(), state.rank, GetAffixList(state.affixMask));
         return true;
     }
@@ -1609,6 +1774,7 @@ public:
 
         state.affixMask = 0;
         RollAffixes(state);
+        state.lastSeenAt = uint32(GameTime::GetGameTime().count());
         SaveNemesisState(target, state);
         ApplyNemesisState(target, state);
         handler->PSendSysMessage("Rerolled affixes for {}: {}.", target->GetName(), GetAffixList(state.affixMask));

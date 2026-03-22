@@ -308,3 +308,31 @@ NemesisSystem.AnnounceMinRank = 1
 #
 
 NemesisSystem.VisualAuraSpell = 0
+
+#
+#    NemesisSystem.AddonBootstrapRecentHours
+#        Description: Recent nemeses within this many hours are included in
+#                     player addon bootstrap responses, alongside rank 5 and
+#                     relation-matched nemeses.
+#        Default:     24
+#
+
+NemesisSystem.AddonBootstrapRecentHours = 24
+
+#
+#    NemesisSystem.AddonBootstrapMaxEntries
+#        Description: Maximum number of nemesis entries sent in a filtered
+#                     player addon bootstrap response.
+#        Default:     100
+#
+
+NemesisSystem.AddonBootstrapMaxEntries = 100
+
+#
+#    NemesisSystem.AddonReportCooldownSeconds
+#        Description: Minimum time between validated addon sighting updates for
+#                     the same nemesis spawn.
+#        Default:     30
+#
+
+NemesisSystem.AddonReportCooldownSeconds = 30

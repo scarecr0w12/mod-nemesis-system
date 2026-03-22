@@ -346,6 +346,8 @@ function UI:RefreshList()
             row.rank:SetText(string.format("R%d", nemesis.rank or 1))
             row.zone:SetText(nemesis.zoneName or "Unknown")
             row.lastSeen:SetText(self:FormatLastSeen(nemesis.lastSeenAt))
+            local alpha = NT:GetVisibilityAlpha(nemesis)
+            row:SetAlpha(alpha)
             if NT.data.selectedSpawnId == nemesis.spawnId then
                 row:SetBackdropColor(0.25, 0.25, 0.35, 0.85)
             else
@@ -354,6 +356,7 @@ function UI:RefreshList()
         else
             row.spawnId = nil
             row.nemesis = nil
+            row:SetAlpha(1.0)
             row:Hide()
         end
     end
@@ -373,7 +376,7 @@ function UI:RefreshDetails()
     end
 
     self.detailText:SetText(string.format(
-        "Name: %s\nLevel: %d\nRank: %d - %s\nZone: %s (%d)\nRelation: %s\nReward: %s\nThreat: %s\nTarget: %s (%d)\nAffixes: %s\nLast Seen: %s\nCoords: %.1f, %.1f, %.1f\nSpawn ID: %s",
+        "Name: %s\nLevel: %d\nRank: %d - %s\nZone: %s (%d)\nRelation: %s\nReward: %s\nThreat: %s\nTarget: %s (%d)\nAffixes: %s\nLast Seen: %s\nStatus: %s\nSource: %s\nCoords: %.1f, %.1f, %.1f\nSpawn ID: %s",
         nemesis.name or "Unknown",
         nemesis.level or 0,
         nemesis.rank or 1,
@@ -387,6 +390,8 @@ function UI:RefreshDetails()
         nemesis.targetGuid or 0,
         nemesis.affixText or "None",
         self:FormatLastSeen(nemesis.lastSeenAt),
+        NT:GetStalenessState(nemesis),
+        nemesis.lastSeenSource or "unknown",
         nemesis.x or 0,
         nemesis.y or 0,
         nemesis.z or 0,
@@ -481,6 +486,7 @@ function UI:RefreshMap()
             marker:ClearAllPoints()
             marker:SetPoint("CENTER", self.canvas, "TOPLEFT", width * x, -(height * y))
             marker:Show()
+            marker:SetAlpha(NT:GetVisibilityAlpha(nemesis))
 
             local r, g, b = relationColor(nemesis.relation)
             marker.texture:SetTexture("Interface\\MINIMAP\\POIIcons")
@@ -557,6 +563,7 @@ function UI:CreateRow(parent, index)
         GameTooltip:AddLine(string.format("Reward: %s  Threat: %s", nemesis.rewardClass or "none", nemesis.threatClass or "low"), 1, 0.82, 0.2)
         GameTooltip:AddLine(string.format("Zone: %s", nemesis.zoneName or "Unknown"), 0.85, 0.85, 0.85)
         GameTooltip:AddLine("Last Seen: " .. self:FormatLastSeen(nemesis.lastSeenAt), 0.7, 0.9, 0.7)
+        GameTooltip:AddLine(string.format("Status: %s  Source: %s", NT:GetStalenessState(nemesis), nemesis.lastSeenSource or "unknown"), 0.8, 0.8, 0.8)
         GameTooltip:Show()
     end)
 
@@ -680,9 +687,9 @@ function UI:Create()
     sync:SetWidth(90)
     sync:SetHeight(22)
     sync:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -40)
-    sync:SetText("Sync")
+    sync:SetText("Refresh")
     sync:SetScript("OnClick", function()
-        NT:RequestSync()
+        NT:RefreshFromSources()
     end)
 
     local waypoint = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")

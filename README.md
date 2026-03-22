@@ -39,6 +39,7 @@ This scaffold implements the first vertical slice:
 
 1. Build AzerothCore with the module enabled.
 2. Import `data/sql/db-characters/base/nemesis_system.sql` into the characters database.
+  - Existing installs should also apply `data/sql/db-characters/updates/2026_03_22_00_nemesis_last_seen.sql`.
 3. Copy `conf/mod_nemesis_system.conf.dist` to your server config directory if needed.
 4. Restart `worldserver`.
 
@@ -125,30 +126,44 @@ Copy that folder into the game client's `Interface/AddOns/` directory.
 
 Current addon/server bridge behavior:
 
-- `.nemesis addon sync`: player-safe command that sends the current active nemesis snapshot to the client addon transport.
+- `.nemesis addon bootstrap`: player-safe command that sends a filtered addon bootstrap containing recent, relation-matched, and rank 5 nemeses.
+- `.nemesis addon report <spawnId>`: player-safe command used by the addon to submit a validated local sighting for a known nemesis.
+- `.nemesis addon sync`: GM-only command that sends the full active nemesis snapshot for debugging.
 - Server payload prefix: `Nemesis`
 - Server payload families currently implemented:
-  - `V1:HELLO`
-  - `V1:SNAPSHOT_BEGIN`
-  - `V1:SNAPSHOT_ENTRY`
-  - `V1:SNAPSHOT_END`
-  - `V1:UPSERT`
-  - `V1:REMOVE`
-  - `V1:CHUNK`
+  - `V2:HELLO`
+  - `V2:BOOTSTRAP_BEGIN`
+  - `V2:BOOTSTRAP_ENTRY`
+  - `V2:BOOTSTRAP_END`
+  - `V2:RANK5_BROADCAST`
+  - `V2:UPSERT_VALIDATED`
+  - `V2:REMOVE`
+  - `V2:CHUNK`
 
 Current addon scaffold behavior:
 
 - standalone movable/resizable tracker window
 - live nemesis list with relation-aware sorting
+- AceDB-backed local nemesis cache used as the addon's working dataset
+- stale fading and hiding based on last-seen timestamps
 - basic detail panel
 - zoomable and pannable placeholder map canvas
-- snapshot ingest, chunk reassembly, and live upsert/remove handling
+- filtered bootstrap ingest, chunk reassembly, peer sync, and validated upsert/remove handling
 - waypoint fallback that prints selected nemesis coordinates to chat
+- peer sync over addon comms for sharing validated sightings with guild, party, raid, or public channel scopes
+
+Current addon location model:
+
+- reaching rank 5 broadcasts a rounded last-known location realm-wide
+- recent and relation-matched nemeses are restored via filtered bootstrap instead of full snapshot reloads
+- lower-rank location refresh is driven by validated local sightings and addon-to-addon sharing
+- local addon cache persists across sessions via AceDB and merges entries by timestamp
 
 Current limitations:
 
 - the client map is still a placeholder plotting surface rather than a real zone-texture map
 - no dedicated waypoint addon integration yet
+- public-channel peer sync still depends on players already being in the configured channel
 - no compile or in-client runtime verification has been completed yet for this addon bridge
 
 ## Next Steps

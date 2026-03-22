@@ -2,6 +2,7 @@ CREATE TABLE IF NOT EXISTS `character_nemesis` (
     `guid` bigint unsigned NOT NULL COMMENT 'Creature spawn id',
     `creature_entry` int unsigned NOT NULL COMMENT 'Original creature entry',
     `map_id` int unsigned NOT NULL,
+    `zone_id` int unsigned NOT NULL DEFAULT 0,
     `pos_x` float NOT NULL,
     `pos_y` float NOT NULL,
     `pos_z` float NOT NULL,
@@ -19,8 +20,10 @@ CREATE TABLE IF NOT EXISTS `character_nemesis` (
     `nemesis_target_guid` int unsigned NOT NULL COMMENT 'Player guid that created the nemesis',
     `last_promotion_at` int unsigned NOT NULL DEFAULT 0 COMMENT 'Last nemesis promotion time as unix timestamp',
     `last_victim_guid` int unsigned NOT NULL DEFAULT 0 COMMENT 'Last victim guid used for anti-feed cooldowns',
+    `last_seen_at` int unsigned NOT NULL DEFAULT 0 COMMENT 'Last validated sighting time as unix timestamp',
     `creation_date` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`guid`),
     KEY `idx_character_nemesis_target` (`nemesis_target_guid`),
-    KEY `idx_character_nemesis_created` (`creation_date`)
+    KEY `idx_character_nemesis_created` (`creation_date`),
+    KEY `idx_character_nemesis_last_seen` (`last_seen_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
