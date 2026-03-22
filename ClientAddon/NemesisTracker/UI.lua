@@ -4,14 +4,20 @@ local NT = NemesisTracker
 NT.UI = NT.UI or {}
 local UI = NT.UI
 
-local ROW_HEIGHT = 22
-local ROW_COUNT = 18
+local DEFAULT_ROW_HEIGHT = 22
+local COMPACT_ROW_HEIGHT = 18
+local MAX_ROW_COUNT = 24
 local FILTERS = {
     { key = "all", label = "All" },
     { key = "own", label = "Own" },
     { key = "party", label = "Party" },
     { key = "guild", label = "Guild" },
     { key = "public", label = "Public" },
+}
+
+local SCOPES = {
+    { key = "all", label = "All Zones" },
+    { key = "zone", label = "This Map" },
 }
 
 local function clamp(value, minValue, maxValue)
@@ -22,6 +28,14 @@ local function clamp(value, minValue, maxValue)
         return maxValue
     end
     return value
+end
+
+local function modulo(value, divisor)
+    if math.fmod then
+        return math.fmod(value, divisor)
+    end
+
+    return value - math.floor(value / divisor) * divisor
 end
 
 local function createBackdrop(frame)
@@ -62,6 +76,41 @@ local function threatColor(threat)
     return 0.4, 1.0, 0.4
 end
 
+local function getMarkerTexCoord(rank)
+    local iconIndex = math.max(0, math.min(7, (rank or 1) - 1))
+    local left = iconIndex * 0.125
+    return left, left + 0.125, 0, 0.125
+end
+
+function UI:GetRowHeight()
+    if NT.db and NT.db.compactList then
+        return COMPACT_ROW_HEIGHT
+    end
+
+    return DEFAULT_ROW_HEIGHT
+end
+
+function UI:LayoutRows()
+    if not self.rows or not self.list then
+        return
+    end
+
+    local rowHeight = self:GetRowHeight()
+    local visibleRows = NT:GetVisibleRows()
+    self.list:SetHeight((rowHeight + 2) * visibleRows)
+
+    for index, row in ipairs(self.rows) do
+        row:ClearAllPoints()
+        row:SetHeight(rowHeight)
+        row:SetWidth(250)
+        if index == 1 then
+            row:SetPoint("TOPLEFT", self.list, "TOPLEFT", 0, 0)
+        else
+            row:SetPoint("TOPLEFT", self.rows[index - 1], "BOTTOMLEFT", 0, -2)
+        end
+    end
+end
+
 local function getDisplayedNemesis()
     local selected = NT:GetSelectedNemesis()
     if selected then
@@ -72,17 +121,52 @@ local function getDisplayedNemesis()
 end
 
 local function getDisplayedZoneInfo()
-    local nemesis = getDisplayedNemesis()
-    if not nemesis then
+    local zoneId, zoneName = NT:EnsureDisplayedZone()
+    if not zoneId and not zoneName then
         return nil, nil, nil
     end
 
-    return nemesis, nemesis.zoneId, nemesis.zoneName
+    return zoneId, zoneName, NT.data.displayedZoneKey
+end
+
+local function isNemesisInZone(nemesis, zoneId, zoneName, zoneMapKey)
+    if not nemesis then
+        return false
+    end
+
+    if zoneMapKey and nemesis.zoneKey then
+        return nemesis.zoneKey == zoneMapKey
+    end
+
+    if zoneId and zoneId ~= 0 then
+        return nemesis.zoneId == zoneId
+    end
+
+    if zoneName and zoneName ~= "" then
+        return nemesis.zoneName == zoneName
+    end
+
+    return false
+end
+
+local function getDisplayedZoneCount(zoneId, zoneName, zoneMapKey)
+    local count = 0
+    for _, nemesis in ipairs(NT.data.ordered) do
+        if isNemesisInZone(nemesis, zoneId, zoneName, zoneMapKey) then
+            count = count + 1
+        end
+    end
+
+    return count
 end
 
 function UI:EnsureMapTiles()
     if self.mapTiles then
-        return
+        return true
+    end
+
+    if not NT.MapData or not NT.MapData.tileCount then
+        return false
     end
 
     self.mapTiles = {}
@@ -92,10 +176,32 @@ function UI:EnsureMapTiles()
         tile:Hide()
         self.mapTiles[index] = tile
     end
+
+    return true
 end
 
 function UI:RefreshMapTiles(width, height, zoneId, zoneName)
-    self:EnsureMapTiles()
+    if not self:EnsureMapTiles() or not NT.MapData or not NT.MapData.tileColumns or
+        not NT.MapData.tileRows or type(NT.MapData.GetTileTexture) ~= "function" then
+        for _, tile in ipairs(self.mapTiles or {}) do
+            tile:SetTexture(nil)
+            tile:Hide()
+        end
+
+        if self.mapFallback then
+            self.mapFallback:Show()
+        end
+
+        if self.mapZoneText then
+            if zoneName and zoneName ~= "" then
+                self.mapZoneText:SetText(zoneName)
+            else
+                self.mapZoneText:SetText("Map data unavailable")
+            end
+        end
+
+        return
+    end
 
     local tileWidth = width / NT.MapData.tileColumns
     local tileHeight = height / NT.MapData.tileRows
@@ -104,7 +210,7 @@ function UI:RefreshMapTiles(width, height, zoneId, zoneName)
     for index, tile in ipairs(self.mapTiles) do
         local texturePath = NT.MapData:GetTileTexture(zoneId, zoneName, index)
         if texturePath then
-            local column = math.mod(index - 1, NT.MapData.tileColumns)
+            local column = modulo(index - 1, NT.MapData.tileColumns)
             local row = math.floor((index - 1) / NT.MapData.tileColumns)
             tile:ClearAllPoints()
             tile:SetPoint("TOPLEFT", self.canvas, "TOPLEFT", column * tileWidth, -(row * tileHeight))
@@ -163,7 +269,14 @@ function UI:RefreshStatus()
     local page = NT.data.page or 1
     local maxPage = NT:GetMaxPage()
     local filter = string.upper(NT.data.currentFilter or "all")
-    self.statusText:SetText(string.format("State: %s  Filter: %s  Tracked: %d  Page: %d/%d  Last Sync: %s", state, filter, total, page, maxPage, lastSync))
+    local scope = (NT.data.currentScope or "all") == "zone" and "MAP" or "ALL"
+    local zoneLabel = NT.data.displayedZoneName or "None"
+    local search = NT.data.currentSearch or ""
+    if search ~= "" then
+        self.statusText:SetText(string.format("State: %s  Filter: %s  Scope: %s  Search: %s  Tracked: %d  Page: %d/%d  Zone: %s  Last Sync: %s", state, filter, scope, search, total, page, maxPage, zoneLabel, lastSync))
+    else
+        self.statusText:SetText(string.format("State: %s  Filter: %s  Scope: %s  Tracked: %d  Page: %d/%d  Zone: %s  Last Sync: %s", state, filter, scope, total, page, maxPage, zoneLabel, lastSync))
+    end
 
     if self.pageText then
         self.pageText:SetText(string.format("Page %d/%d", page, maxPage))
@@ -194,9 +307,33 @@ function UI:RefreshStatus()
             end
         end
     end
+
+    if self.scopeButtons then
+        for _, button in ipairs(self.scopeButtons) do
+            if button.key == (NT.data.currentScope or "all") then
+                button:Disable()
+            else
+                button:Enable()
+            end
+        end
+    end
+
+    if self.compactButton then
+        if NT.db and NT.db.compactList then
+            self.compactButton:SetText("Expanded")
+        else
+            self.compactButton:SetText("Compact")
+        end
+    end
+
+    if self.searchBox and self.searchBox:GetText() ~= (NT.data.currentSearch or "") then
+        self.searchBox:SetText(NT.data.currentSearch or "")
+    end
 end
 
 function UI:RefreshList()
+    self:LayoutRows()
+
     for index, row in ipairs(self.rows) do
         local nemesis = NT:GetPagedNemesis(index)
         if nemesis then
@@ -266,13 +403,31 @@ function UI:RefreshMap()
         return
     end
 
-    local zoom = NT.db.zoom or 1
-    local panX = NT.db.panX or 0
-    local panY = NT.db.panY or 0
-    local _, displayedZoneId, displayedZoneName = getDisplayedZoneInfo()
+    local displayedZoneId, displayedZoneName, displayedZoneKey = getDisplayedZoneInfo()
+    local zoneCount = getDisplayedZoneCount(displayedZoneId, displayedZoneName, displayedZoneKey)
 
     if self.zoomText then
-        self.zoomText:SetText(string.format("Zoom %.1fx", zoom))
+        if zoneCount == 1 then
+            self.zoomText:SetText("1 creature")
+        else
+            self.zoomText:SetText(string.format("%d creatures", zoneCount))
+        end
+    end
+
+    if self.prevZoneButton then
+        if #NT:GetAvailableZones() > 1 then
+            self.prevZoneButton:Enable()
+        else
+            self.prevZoneButton:Disable()
+        end
+    end
+
+    if self.nextZoneButton then
+        if #NT:GetAvailableZones() > 1 then
+            self.nextZoneButton:Enable()
+        else
+            self.nextZoneButton:Disable()
+        end
     end
 
     for _, marker in ipairs(self.markers) do
@@ -288,7 +443,7 @@ function UI:RefreshMap()
     self:RefreshMapTiles(width, height, displayedZoneId, displayedZoneName)
 
     for index, nemesis in ipairs(NT.data.ordered) do
-        if not displayedZoneId or nemesis.zoneId == displayedZoneId then
+        if isNemesisInZone(nemesis, displayedZoneId, displayedZoneName, displayedZoneKey) then
             local marker = self.markers[index]
             if not marker then
                 marker = CreateFrame("Button", nil, self.canvas)
@@ -321,20 +476,21 @@ function UI:RefreshMap()
             end
 
             marker.spawnId = nemesis.spawnId
-            local x = clamp((0.5 + (((nemesis.mapX or 0.5) - 0.5) * zoom) + panX), 0.03, 0.97)
-            local y = clamp((0.5 + (((nemesis.mapY or 0.5) - 0.5) * zoom) + panY), 0.03, 0.97)
+            local x = clamp(nemesis.mapX or 0.5, 0.03, 0.97)
+            local y = clamp(nemesis.mapY or 0.5, 0.03, 0.97)
             marker:ClearAllPoints()
             marker:SetPoint("CENTER", self.canvas, "TOPLEFT", width * x, -(height * y))
             marker:Show()
 
             local r, g, b = relationColor(nemesis.relation)
             marker.texture:SetTexture("Interface\\MINIMAP\\POIIcons")
-            marker.texture:SetTexCoord(0, 0.125, 0, 0.125)
-            marker.texture:SetVertexColor(r, g, b)
+            marker.texture:SetTexCoord(getMarkerTexCoord(nemesis.rank or 1))
+            local tr, tg, tb = threatColor(nemesis.threatClass)
+            marker.texture:SetVertexColor((r + tr) / 2, (g + tg) / 2, (b + tb) / 2)
             if NT.data.selectedSpawnId == nemesis.spawnId then
-                marker:SetScale(1.3)
+                marker:SetScale(1.1 + ((nemesis.rank or 1) * 0.08))
             else
-                marker:SetScale(1.0)
+                marker:SetScale(0.9 + ((nemesis.rank or 1) * 0.05))
             end
         end
     end
@@ -349,15 +505,10 @@ end
 
 function UI:CreateRow(parent, index)
     local row = CreateFrame("Button", nil, parent)
-    row:SetHeight(ROW_HEIGHT)
+    row:SetHeight(self:GetRowHeight())
     row:SetWidth(250)
     createBackdrop(row)
     row:SetBackdropColor(0.08, 0.08, 0.08, 0.75)
-    if index == 1 then
-        row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
-    else
-        row:SetPoint("TOPLEFT", self.rows[index - 1], "BOTTOMLEFT", 0, -2)
-    end
 
     row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     row.name:SetPoint("LEFT", row, "LEFT", 6, 0)
@@ -433,6 +584,57 @@ function UI:CreateFilterButton(parent, index, filterDef)
     self.filterButtons[index] = button
 end
 
+function UI:CreateScopeButton(parent, index, scopeDef)
+    local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    button:SetWidth(78)
+    button:SetHeight(20)
+    if index == 1 then
+        button:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -24)
+    else
+        button:SetPoint("LEFT", self.scopeButtons[index - 1], "RIGHT", 4, 0)
+    end
+    button:SetText(scopeDef.label)
+    button.key = scopeDef.key
+    button:SetScript("OnClick", function()
+        NT:SetScope(scopeDef.key)
+    end)
+    self.scopeButtons[index] = button
+end
+
+function UI:ShowZoneMenu()
+    if not self.zoneMenu then
+        self.zoneMenu = CreateFrame("Frame", "NemesisTrackerZoneMenu", UIParent, "UIDropDownMenuTemplate")
+    end
+
+    local menu = {}
+    local zones = NT:GetAvailableZones()
+    if #zones == 0 then
+        table.insert(menu, {
+            text = "No zones available",
+            isTitle = true,
+            notCheckable = true,
+        })
+    else
+        table.insert(menu, {
+            text = "Select zone",
+            isTitle = true,
+            notCheckable = true,
+        })
+
+        for _, zone in ipairs(zones) do
+            table.insert(menu, {
+                text = zone.zoneName or "Unknown",
+                checked = zone.zoneKey == NT.data.displayedZoneKey,
+                func = function()
+                    NT:SelectDisplayedZone(zone.zoneId, zone.zoneName, zone.zoneKey)
+                end,
+            })
+        end
+    end
+
+    EasyMenu(menu, self.zoneMenu, self.zoneMenuButton, 0, 0, "MENU")
+end
+
 function UI:Create()
     if self.frame then
         return
@@ -499,22 +701,55 @@ function UI:Create()
     local filters = CreateFrame("Frame", nil, frame)
     filters:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -68)
     filters:SetWidth(320)
-    filters:SetHeight(22)
+    filters:SetHeight(72)
     self.filterButtons = {}
     for index, filterDef in ipairs(FILTERS) do
         self:CreateFilterButton(filters, index, filterDef)
     end
 
+    self.scopeButtons = {}
+    for index, scopeDef in ipairs(SCOPES) do
+        self:CreateScopeButton(filters, index, scopeDef)
+    end
+
+    self.compactButton = CreateFrame("Button", nil, filters, "UIPanelButtonTemplate")
+    self.compactButton:SetWidth(92)
+    self.compactButton:SetHeight(20)
+    self.compactButton:SetPoint("LEFT", self.scopeButtons[#self.scopeButtons], "RIGHT", 4, 0)
+    self.compactButton:SetText("Compact")
+    self.compactButton:SetScript("OnClick", function()
+        NT:ToggleCompactList()
+    end)
+
+    self.searchBox = CreateFrame("EditBox", nil, filters, "InputBoxTemplate")
+    self.searchBox:SetAutoFocus(false)
+    self.searchBox:SetWidth(244)
+    self.searchBox:SetHeight(20)
+    self.searchBox:SetPoint("TOPLEFT", filters, "TOPLEFT", 0, -48)
+    self.searchBox:SetText(NT.data.currentSearch or "")
+    self.searchBox:SetScript("OnEscapePressed", function(editBox)
+        editBox:ClearFocus()
+    end)
+    self.searchBox:SetScript("OnEnterPressed", function(editBox)
+        editBox:ClearFocus()
+    end)
+    self.searchBox:SetScript("OnTextChanged", function(editBox, userInput)
+        if userInput then
+            NT:SetSearch(editBox:GetText())
+        end
+    end)
+
     local list = CreateFrame("Frame", nil, frame)
-    list:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -96)
+    list:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -146)
     list:SetWidth(256)
-    list:SetHeight((ROW_HEIGHT + 2) * ROW_COUNT)
+    list:SetHeight((self:GetRowHeight() + 2) * NT:GetVisibleRows())
     self.list = list
 
     self.rows = {}
-    for index = 1, ROW_COUNT do
+    for index = 1, MAX_ROW_COUNT do
         self:CreateRow(list, index)
     end
+    self:LayoutRows()
 
     local mapPanel = CreateFrame("Frame", nil, frame)
     mapPanel:SetPoint("TOPLEFT", list, "TOPRIGHT", 12, 0)
@@ -525,40 +760,38 @@ function UI:Create()
     local canvas = CreateFrame("Frame", nil, mapPanel)
     canvas:SetAllPoints(mapPanel)
     canvas:EnableMouse(true)
-    canvas:SetScript("OnMouseWheel", function(_, delta)
-        NT.db.zoom = clamp((NT.db.zoom or 1) + (delta * 0.1), 0.4, 3.0)
-        UI:RefreshMap()
-    end)
-    canvas:SetScript("OnMouseDown", function(_, button)
-        if button == "LeftButton" then
-            canvas.isPanning = true
-            local x, y = GetCursorPosition()
-            canvas.panStartX = x
-            canvas.panStartY = y
-            canvas.basePanX = NT.db.panX or 0
-            canvas.basePanY = NT.db.panY or 0
-        end
-    end)
-    canvas:SetScript("OnMouseUp", function()
-        canvas.isPanning = nil
-    end)
-    canvas:SetScript("OnUpdate", function()
-        if not canvas.isPanning then
-            return
-        end
-        local x, y = GetCursorPosition()
-        local scale = UIParent:GetScale()
-        NT.db.panX = clamp((canvas.basePanX or 0) + ((x - canvas.panStartX) / scale) / 800, -0.8, 0.8)
-        NT.db.panY = clamp((canvas.basePanY or 0) - ((y - canvas.panStartY) / scale) / 800, -0.8, 0.8)
-        UI:RefreshMap()
-    end)
     self.canvas = canvas
 
     self.zoomText = mapPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     self.zoomText:SetPoint("TOPRIGHT", mapPanel, "TOPRIGHT", -8, -8)
 
-    self.mapZoneText = mapPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    self.mapZoneText:SetPoint("TOPLEFT", mapPanel, "TOPLEFT", 8, -8)
+    self.prevZoneButton = CreateFrame("Button", nil, mapPanel, "UIPanelButtonTemplate")
+    self.prevZoneButton:SetWidth(22)
+    self.prevZoneButton:SetHeight(20)
+    self.prevZoneButton:SetPoint("TOPLEFT", mapPanel, "TOPLEFT", 8, -6)
+    self.prevZoneButton:SetText("<")
+    self.prevZoneButton:SetScript("OnClick", function()
+        NT:ChangeDisplayedZone(-1)
+    end)
+
+    self.nextZoneButton = CreateFrame("Button", nil, mapPanel, "UIPanelButtonTemplate")
+    self.nextZoneButton:SetWidth(22)
+    self.nextZoneButton:SetHeight(20)
+    self.nextZoneButton:SetPoint("LEFT", self.prevZoneButton, "RIGHT", 196, 0)
+    self.nextZoneButton:SetText(">")
+    self.nextZoneButton:SetScript("OnClick", function()
+        NT:ChangeDisplayedZone(1)
+    end)
+
+    self.zoneMenuButton = CreateFrame("Button", nil, mapPanel, "UIPanelButtonTemplate")
+    self.zoneMenuButton:SetWidth(188)
+    self.zoneMenuButton:SetHeight(20)
+    self.zoneMenuButton:SetPoint("LEFT", self.prevZoneButton, "RIGHT", 8, 0)
+    self.zoneMenuButton:SetText("Select Zone")
+    self.zoneMenuButton:SetScript("OnClick", function()
+        UI:ShowZoneMenu()
+    end)
+    self.mapZoneText = self.zoneMenuButton
 
     self.mapFallback = canvas:CreateTexture(nil, "BACKGROUND")
     self.mapFallback:SetAllPoints(canvas)

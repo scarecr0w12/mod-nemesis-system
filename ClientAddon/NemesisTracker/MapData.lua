@@ -111,22 +111,44 @@ local function sanitizeZoneName(zoneName)
 end
 
 function MapData:GetZone(zoneId, zoneName)
-    local zone = zoneId and byZoneId[zoneId] or nil
+    local zone = zoneName and byZoneName[zoneName] or nil
     if zone then
-        return zone
+        return {
+            file = zone.file,
+            key = zone.file,
+            label = zoneName,
+        }
     end
 
-    zone = zoneName and byZoneName[zoneName] or nil
+    zone = zoneId and byZoneId[zoneId] or nil
     if zone then
-        return zone
+        return {
+            file = zone.file,
+            key = zone.file,
+            label = zoneName or zone.file,
+        }
     end
 
     local sanitized = sanitizeZoneName(zoneName)
     if sanitized then
-        return { file = sanitized }
+        return {
+            file = sanitized,
+            key = sanitized,
+            label = zoneName or sanitized,
+        }
     end
 
     return nil
+end
+
+function MapData:GetZoneKey(zoneId, zoneName)
+    local zone = self:GetZone(zoneId, zoneName)
+    return zone and zone.key or nil
+end
+
+function MapData:GetZoneLabel(zoneId, zoneName)
+    local zone = self:GetZone(zoneId, zoneName)
+    return zone and zone.label or zoneName
 end
 
 function MapData:GetTileTexture(zoneId, zoneName, index)

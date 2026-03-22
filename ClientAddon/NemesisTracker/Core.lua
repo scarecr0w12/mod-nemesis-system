@@ -1,7 +1,12 @@
 local addonName = ...
 
+local existingNamespace = NemesisTracker or {}
+
 NemesisTracker = LibStub("AceAddon-3.0"):NewAddon("NemesisTracker", "AceConsole-3.0", "AceEvent-3.0", "AceTimer-3.0")
 local NT = NemesisTracker
+
+NT.MapData = existingNamespace.MapData or NT.MapData or {}
+NT.UI = existingNamespace.UI or NT.UI or {}
 
 local RELATION_ORDER = { own = 1, party = 2, guild = 3, public = 4 }
 
@@ -12,12 +17,17 @@ NT.data = NT.data or {
     ordered = {},
     chunks = {},
     selectedSpawnId = nil,
+    displayedZoneId = nil,
+    displayedZoneName = nil,
+    displayedZoneKey = nil,
     snapshotExpected = 0,
     snapshotActive = false,
     lastSyncAt = 0,
     lastServerTime = 0,
     connectionState = "idle",
     currentFilter = "all",
+    currentScope = "all",
+    currentSearch = "",
     page = 1,
     filteredCount = 0,
 }
@@ -50,11 +60,27 @@ end
 
 local function shouldIncludeNemesis(nemesis)
     local filter = NT.data.currentFilter or "all"
-    if filter == "all" then
-        return true
+    if filter ~= "all" and nemesis.relation ~= filter then
+        return false
     end
 
-    return nemesis.relation == filter
+    local search = string.lower(NT.data.currentSearch or "")
+    if search ~= "" then
+        local name = string.lower(nemesis.name or "")
+        local zone = string.lower(nemesis.zoneName or "")
+        local rankTier = string.lower(nemesis.rankTier or "")
+        if not string.find(name, search, 1, true) and
+            not string.find(zone, search, 1, true) and
+            not string.find(rankTier, search, 1, true) then
+            return false
+        end
+    end
+
+    if (NT.data.currentScope or "all") == "zone" then
+        return nemesis.zoneKey and nemesis.zoneKey == NT.data.displayedZoneKey
+    end
+
+    return true
 end
 
 local function sortNemeses()
@@ -110,6 +136,10 @@ function NT:GetSelectedNemesis()
 end
 
 function NT:GetVisibleRows()
+    if self.db and self.db.compactList then
+        return 24
+    end
+
     return 18
 end
 
@@ -121,6 +151,108 @@ end
 function NT:GetPagedNemesis(index)
     local offset = ((self.data.page or 1) - 1) * self:GetVisibleRows()
     return self.data.ordered[offset + index]
+end
+
+local function zoneKey(zoneId, zoneName)
+    if NT.MapData and type(NT.MapData.GetZoneKey) == "function" then
+        local key = NT.MapData:GetZoneKey(zoneId, zoneName)
+        if key then
+            return key
+        end
+    end
+
+    return string.format("%s:%s", tostring(zoneId or 0), zoneName or "")
+end
+
+function NT:GetAvailableZones()
+    local zones = {}
+    local seen = {}
+    local filter = self.data.currentFilter or "all"
+
+    for _, nemesis in pairs(self.data.nemeses) do
+        if filter == "all" or nemesis.relation == filter then
+            local key = zoneKey(nemesis.zoneId, nemesis.zoneName)
+            if not seen[key] then
+                seen[key] = true
+                table.insert(zones, {
+                    zoneId = nemesis.zoneId,
+                    zoneName = nemesis.zoneName or "Unknown",
+                    zoneKey = key,
+                })
+            end
+        end
+    end
+
+    table.sort(zones, function(a, b)
+        if (a.zoneName or "") ~= (b.zoneName or "") then
+            return (a.zoneName or "") < (b.zoneName or "")
+        end
+
+        return (a.zoneId or 0) < (b.zoneId or 0)
+    end)
+
+    return zones
+end
+
+function NT:SetDisplayedZone(zoneId, zoneName, zoneMapKey)
+    self.data.displayedZoneId = zoneId
+    self.data.displayedZoneName = zoneName
+    self.data.displayedZoneKey = zoneMapKey or zoneKey(zoneId, zoneName)
+end
+
+function NT:EnsureDisplayedZone()
+    local zones = self:GetAvailableZones()
+    if #zones == 0 then
+        self:SetDisplayedZone(nil, nil)
+        return nil, nil
+    end
+
+    local currentKey = zoneKey(self.data.displayedZoneId, self.data.displayedZoneName)
+    for _, zone in ipairs(zones) do
+        if zone.zoneKey == currentKey or zone.zoneKey == self.data.displayedZoneKey then
+            self:SetDisplayedZone(zone.zoneId, zone.zoneName, zone.zoneKey)
+            return zone.zoneId, zone.zoneName
+        end
+    end
+
+    local selected = self:GetSelectedNemesis()
+    if selected then
+        local selectedKey = zoneKey(selected.zoneId, selected.zoneName)
+        for _, zone in ipairs(zones) do
+            if zone.zoneKey == selectedKey then
+                self:SetDisplayedZone(zone.zoneId, zone.zoneName, zone.zoneKey)
+                return zone.zoneId, zone.zoneName
+            end
+        end
+    end
+
+    self:SetDisplayedZone(zones[1].zoneId, zones[1].zoneName, zones[1].zoneKey)
+    return zones[1].zoneId, zones[1].zoneName
+end
+
+function NT:ChangeDisplayedZone(delta)
+    local zones = self:GetAvailableZones()
+    if #zones == 0 then
+        return
+    end
+
+    local currentKey = zoneKey(self.data.displayedZoneId, self.data.displayedZoneName)
+    local currentIndex = 1
+    for index, zone in ipairs(zones) do
+        if zone.zoneKey == currentKey or zone.zoneKey == self.data.displayedZoneKey then
+            currentIndex = index
+            break
+        end
+    end
+
+    local targetIndex = currentIndex + delta
+    if targetIndex < 1 then
+        targetIndex = #zones
+    elseif targetIndex > #zones then
+        targetIndex = 1
+    end
+
+    self:SelectDisplayedZone(zones[targetIndex].zoneId, zones[targetIndex].zoneName, zones[targetIndex].zoneKey)
 end
 
 function NT:SetFilter(filter)
@@ -135,6 +267,66 @@ function NT:SetFilter(filter)
     end
     if not self.data.selectedSpawnId and self.data.ordered[1] then
         self.data.selectedSpawnId = self.data.ordered[1].spawnId
+    end
+    if self.UI then
+        self.UI:RefreshAll()
+    end
+end
+
+function NT:SetSearch(search)
+    self.data.currentSearch = string.lower(search or "")
+    self.data.page = 1
+    sortNemeses()
+    if self.data.selectedSpawnId and not self.data.nemeses[self.data.selectedSpawnId] then
+        self.data.selectedSpawnId = nil
+    end
+    if self.data.selectedSpawnId and not shouldIncludeNemesis(self.data.nemeses[self.data.selectedSpawnId]) then
+        self.data.selectedSpawnId = nil
+    end
+    if not self.data.selectedSpawnId and self.data.ordered[1] then
+        self.data.selectedSpawnId = self.data.ordered[1].spawnId
+    end
+    if self.UI then
+        self.UI:RefreshAll()
+    end
+end
+
+function NT:SetScope(scope)
+    if scope ~= "zone" then
+        scope = "all"
+    end
+
+    self.data.currentScope = scope
+    self.data.page = 1
+    sortNemeses()
+    if self.data.selectedSpawnId and not self.data.nemeses[self.data.selectedSpawnId] then
+        self.data.selectedSpawnId = nil
+    end
+    if self.data.selectedSpawnId and not shouldIncludeNemesis(self.data.nemeses[self.data.selectedSpawnId]) then
+        self.data.selectedSpawnId = nil
+    end
+    if not self.data.selectedSpawnId and self.data.ordered[1] then
+        self.data.selectedSpawnId = self.data.ordered[1].spawnId
+    end
+    if self.UI then
+        self.UI:RefreshAll()
+    end
+end
+
+function NT:SelectDisplayedZone(zoneId, zoneName, zoneMapKey)
+    self:SetDisplayedZone(zoneId, zoneName, zoneMapKey)
+    if (self.data.currentScope or "all") == "zone" then
+        self.data.page = 1
+        sortNemeses()
+        if self.data.selectedSpawnId and not self.data.nemeses[self.data.selectedSpawnId] then
+            self.data.selectedSpawnId = nil
+        end
+        if self.data.selectedSpawnId and not shouldIncludeNemesis(self.data.nemeses[self.data.selectedSpawnId]) then
+            self.data.selectedSpawnId = nil
+        end
+        if not self.data.selectedSpawnId and self.data.ordered[1] then
+            self.data.selectedSpawnId = self.data.ordered[1].spawnId
+        end
     end
     if self.UI then
         self.UI:RefreshAll()
@@ -160,10 +352,7 @@ function NT:CenterOnNemesis(spawnId)
         return
     end
 
-    self.db.panX = (0.5 - (nemesis.mapX or 0.5)) * (self.db.zoom or 1)
-    self.db.panY = (0.5 - (nemesis.mapY or 0.5)) * (self.db.zoom or 1)
-    self.db.panX = math.max(-0.8, math.min(0.8, self.db.panX))
-    self.db.panY = math.max(-0.8, math.min(0.8, self.db.panY))
+    self:SetDisplayedZone(nemesis.zoneId, nemesis.zoneName)
 end
 
 function NT:SelectNemesis(spawnId)
@@ -185,10 +374,12 @@ end
 function NT:ResetSnapshot(count)
     wipe(self.data.nemeses)
     wipe(self.data.ordered)
+    self:SetDisplayedZone(nil, nil)
     self.data.snapshotExpected = tonumber(count) or 0
     self.data.snapshotActive = true
     self.data.connectionState = "syncing"
     self.data.page = 1
+    self.data.filteredCount = 0
 end
 
 function NT:FinalizeSnapshot()
@@ -216,6 +407,7 @@ function NT:UpsertNemesis(fields)
     nemesis.mapId = tonumber(fields[6]) or 0
     nemesis.zoneId = tonumber(fields[7]) or 0
     nemesis.zoneName = fields[8] or "Unknown"
+    nemesis.zoneKey = zoneKey(nemesis.zoneId, nemesis.zoneName)
     nemesis.x = tonumber(fields[9]) or 0
     nemesis.y = tonumber(fields[10]) or 0
     nemesis.z = tonumber(fields[11]) or 0
@@ -417,14 +609,21 @@ function NT:InitializeDatabase()
     local defaults = {
         profile = {
             window = { point = "CENTER", relativePoint = "CENTER", x = 0, y = 0, width = 980, height = 640 },
-            zoom = 1,
-            panX = 0,
-            panY = 0,
+            compactList = false,
         },
     }
 
     self.database = LibStub("AceDB-3.0"):New("NemesisTrackerDB", defaults, true)
     self.db = self.database.profile
+end
+
+function NT:ToggleCompactList()
+    self.db.compactList = not self.db.compactList
+    self.data.page = 1
+    sortNemeses()
+    if self.UI then
+        self.UI:RefreshAll()
+    end
 end
 
 function NT:SlashCommand(input)
