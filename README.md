@@ -20,6 +20,7 @@ This scaffold implements the first vertical slice:
 - GM commands for testing and state control
 - configurable announcements for creation, rank-up, and kill events
 - anti-feed cooldowns for repeated promotions and same-victim farming
+- initial companion addon transport and client scaffold for live nemesis tracking
 
 ## Files
 
@@ -27,6 +28,8 @@ This scaffold implements the first vertical slice:
 - `src/nemesis_system_loader.cpp`: module loader entrypoint
 - `conf/mod_nemesis_system.conf.dist`: module configuration
 - `data/sql/db-characters/base/nemesis_system.sql`: characters database schema
+- `doc/companion-addon-spec.md`: companion addon design and message contract
+- `ClientAddon/NemesisTracker/`: WoW 3.3.5a addon scaffold
 
 ## Installation
 
@@ -107,6 +110,42 @@ Reward scaling config:
 - `.nemesis mapclear`: clear all active nemeses on the current map
 - `.nemesis clearall`: clear all stored nemesis records
 - `.nemesis reload`: reload module config
+
+## Companion Addon
+
+The module now includes an initial WoW 3.3.5a client addon scaffold under:
+
+- `ClientAddon/NemesisTracker/`
+
+Copy that folder into the game client's `Interface/AddOns/` directory.
+
+Current addon/server bridge behavior:
+
+- `.nemesis addon sync`: player-safe command that sends the current active nemesis snapshot to the client addon transport.
+- Server payload prefix: `Nemesis`
+- Server payload families currently implemented:
+  - `V1:HELLO`
+  - `V1:SNAPSHOT_BEGIN`
+  - `V1:SNAPSHOT_ENTRY`
+  - `V1:SNAPSHOT_END`
+  - `V1:UPSERT`
+  - `V1:REMOVE`
+  - `V1:CHUNK`
+
+Current addon scaffold behavior:
+
+- standalone movable/resizable tracker window
+- live nemesis list with relation-aware sorting
+- basic detail panel
+- zoomable and pannable placeholder map canvas
+- snapshot ingest, chunk reassembly, and live upsert/remove handling
+- waypoint fallback that prints selected nemesis coordinates to chat
+
+Current limitations:
+
+- the client map is still a placeholder plotting surface rather than a real zone-texture map
+- no dedicated waypoint addon integration yet
+- no compile or in-client runtime verification has been completed yet for this addon bridge
 
 ## Next Steps
 

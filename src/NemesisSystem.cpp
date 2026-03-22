@@ -1,11 +1,14 @@
 #include "AllCreatureScript.h"
 #include "Chat.h"
+#include "CharacterCache.h"
 #include "CommandScript.h"
 #include "Config.h"
 #include "Creature.h"
+#include "DBCStores.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
 #include "Group.h"
+#include "GuildMgr.h"
 #include "Map.h"
 #include "ObjectGuid.h"
 #include "ObjectMgr.h"
@@ -13,11 +16,13 @@
 #include "Random.h"
 #include "ScriptMgr.h"
 #include "UnitScript.h"
+#include "WorldPacket.h"
 #include "WorldSessionMgr.h"
 
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <functional>
 #include <sstream>
 #include <vector>
 #include <unordered_map>
@@ -41,6 +46,10 @@ namespace
     {
         uint32 creatureEntry = 0;
         uint32 mapId = 0;
+        uint32 zoneId = 0;
+        float homeX = 0.0f;
+        float homeY = 0.0f;
+        float homeZ = 0.0f;
         uint8 rank = 1;
         uint32 affixMask = 0;
         uint32 baseHealth = 1;
@@ -56,6 +65,31 @@ namespace
         uint32 lastPromotionAt = 0;
         uint32 lastVictimGuid = 0;
         uint32 createdAt = 0;
+        uint32 lastSeenAt = 0;
+    };
+
+    struct NemesisAddonView
+    {
+        ObjectGuid::LowType spawnId = 0;
+        uint32 creatureEntry = 0;
+        std::string name;
+        uint32 mapId = 0;
+        uint32 zoneId = 0;
+        std::string zoneName;
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        uint8 level = 0;
+        uint8 rank = 1;
+        std::string rankTier;
+        uint32 affixMask = 0;
+        std::string affixText;
+        uint32 targetGuid = 0;
+        std::string targetName;
+        std::string relation;
+        std::string rewardClass;
+        std::string threatClass;
+        uint32 lastSeenAt = 0;
     };
 
     using NemesisStore = std::unordered_map<ObjectGuid::LowType, NemesisState>;
@@ -64,6 +98,13 @@ namespace
     NemesisStore ActiveNemeses;
     NemesisTickStore RegenTickAccumulators;
     bool CacheLoaded = false;
+
+    std::string constexpr NEMESIS_ADDON_PREFIX = "Nemesis";
+    size_t constexpr NEMESIS_ADDON_CHUNK_SIZE = 220;
+
+    Creature* FindLoadedCreatureBySpawnId(Map* map, ObjectGuid::LowType spawnId);
+    std::string GetNemesisDisplayName(Map* map, ObjectGuid::LowType spawnId, NemesisState const& state);
+    void EnsureCacheLoaded();
 
     bool IsEnabled()
     {
@@ -309,6 +350,307 @@ namespace
         return stream.str();
     }
 
+    std::string SanitizeAddonField(std::string value)
+    {
+        std::replace(value.begin(), value.end(), ':', ';');
+        std::replace(value.begin(), value.end(), '|', '/');
+        std::replace(value.begin(), value.end(), '\t', ' ');
+        std::replace(value.begin(), value.end(), '\r', ' ');
+        std::replace(value.begin(), value.end(), '\n', ' ');
+        return value;
+    }
+
+    std::string GetRankTierLabel(uint8 rank)
+    {
+        switch (rank)
+        {
+            case 1: return "Marked";
+            case 2: return "Hated";
+            case 3: return "Relentless";
+            case 4: return "Legendary";
+            default: return "Mythic";
+        }
+    }
+
+    std::string GetZoneName(uint32 zoneId)
+    {
+        if (!zoneId)
+            return "Unknown";
+
+        if (AreaTableEntry const* area = sAreaTableStore.LookupEntry(zoneId))
+            return area->area_name[0] ? area->area_name[0] : "Unknown";
+
+        return "Unknown";
+    }
+
+    std::string GetPlayerNameByGuidLow(uint32 guidLow)
+    {
+        if (!guidLow)
+            return "";
+
+        if (Player* target = HashMapHolder<Player>::Find(ObjectGuid::Create<HighGuid::Player>(guidLow)))
+            return target->GetName();
+
+        if (CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByGuid(ObjectGuid::Create<HighGuid::Player>(guidLow)))
+            return characterInfo->Name;
+
+        return Acore::StringFormat("Player{}", guidLow);
+    }
+
+    std::string BuildAddonEnvelope(std::string const& payload)
+    {
+        return std::string(NEMESIS_ADDON_PREFIX) + "\t" + payload;
+    }
+
+    void SendAddonPayload(Player* player, std::string const& payload)
+    {
+        if (!player || !player->GetSession())
+            return;
+
+        std::string const fullMessage = BuildAddonEnvelope(payload);
+
+        WorldPacket data(SMSG_MESSAGECHAT, 100);
+        data << uint8(ChatMsg::CHAT_MSG_WHISPER);
+        data << int32(LANG_ADDON);
+        data << player->GetGUID();
+        data << uint32(0);
+        data << player->GetGUID();
+        data << uint32(fullMessage.length() + 1);
+        data << fullMessage;
+        data << uint8(0);
+
+        player->GetSession()->SendPacket(&data);
+    }
+
+    void SendChunkedAddonPayload(Player* player, std::string const& payload)
+    {
+        if (payload.length() <= NEMESIS_ADDON_CHUNK_SIZE)
+        {
+            SendAddonPayload(player, payload);
+            return;
+        }
+
+        std::string id = std::to_string(uint32(GameTime::GetGameTime().count())) + "_" + std::to_string(player->GetGUID().GetCounter());
+        std::vector<std::string> chunks;
+        size_t offset = 0;
+
+        while (offset < payload.size())
+        {
+            size_t length = std::min(NEMESIS_ADDON_CHUNK_SIZE, payload.size() - offset);
+            chunks.push_back(payload.substr(offset, length));
+            offset += length;
+        }
+
+        for (size_t index = 0; index < chunks.size(); ++index)
+        {
+            SendAddonPayload(player, Acore::StringFormat("V1:CHUNK:{}:{}:{}:{}", id, index + 1, chunks.size(), chunks[index]));
+        }
+    }
+
+    std::string GetRelationForPlayer(Player* player, NemesisState const& state)
+    {
+        if (!player)
+            return "public";
+
+        uint32 const playerGuid = player->GetGUID().GetCounter();
+        if (state.targetGuid == playerGuid)
+            return "own";
+
+        if (Group* group = player->GetGroup())
+            if (group->IsMember(ObjectGuid::Create<HighGuid::Player>(state.targetGuid)))
+                return "party";
+
+        if (player->GetGuildId())
+            if (Player* target = HashMapHolder<Player>::Find(ObjectGuid::Create<HighGuid::Player>(state.targetGuid)))
+                if (target->GetGuildId() == player->GetGuildId())
+                    return "guild";
+
+        return "public";
+    }
+
+    std::string GetRewardClassForPlayer(Player* player, NemesisState const& state)
+    {
+        if (!player)
+            return "none";
+
+        if (player->GetGUID().GetCounter() == state.targetGuid)
+            return "revenge";
+
+        if (Group* group = player->GetGroup())
+            if (group->IsMember(ObjectGuid::Create<HighGuid::Player>(state.targetGuid)))
+                return "shared";
+
+        return "bounty";
+    }
+
+    std::string GetThreatClassForPlayer(Player* player, NemesisState const& state, uint8 creatureLevel)
+    {
+        uint32 score = state.rank;
+        if (std::popcount(state.affixMask) >= 2)
+            ++score;
+
+        if (player)
+        {
+            int32 const levelDiff = int32(creatureLevel) - int32(player->GetLevel());
+            if (levelDiff >= 5)
+                score += 2;
+            else if (levelDiff >= 2)
+                ++score;
+        }
+
+        if (score <= 2)
+            return "low";
+        if (score <= 4)
+            return "medium";
+        if (score <= 6)
+            return "high";
+
+        return "extreme";
+    }
+
+    NemesisAddonView BuildAddonView(Player* player, ObjectGuid::LowType spawnId, NemesisState const& state)
+    {
+        NemesisAddonView view;
+        view.spawnId = spawnId;
+        view.creatureEntry = state.creatureEntry;
+        view.mapId = state.mapId;
+        view.zoneId = state.zoneId;
+        view.zoneName = SanitizeAddonField(GetZoneName(state.zoneId));
+        view.x = state.homeX;
+        view.y = state.homeY;
+        view.z = state.homeZ;
+        view.rank = state.rank;
+        view.rankTier = GetRankTierLabel(state.rank);
+        view.affixMask = state.affixMask;
+        view.affixText = SanitizeAddonField(GetAffixList(state.affixMask));
+        view.targetGuid = state.targetGuid;
+        view.targetName = SanitizeAddonField(GetPlayerNameByGuidLow(state.targetGuid));
+        view.relation = GetRelationForPlayer(player, state);
+        view.rewardClass = GetRewardClassForPlayer(player, state);
+        view.lastSeenAt = state.lastSeenAt ? state.lastSeenAt : state.createdAt;
+
+        Map* playerMap = player ? player->GetMap() : nullptr;
+        if (playerMap && playerMap->GetId() != state.mapId)
+            playerMap = nullptr;
+
+        if (Creature* liveCreature = FindLoadedCreatureBySpawnId(playerMap, spawnId))
+        {
+            view.name = SanitizeAddonField(liveCreature->GetName());
+            view.zoneId = liveCreature->GetZoneId();
+            view.zoneName = SanitizeAddonField(GetZoneName(view.zoneId));
+            view.x = liveCreature->GetPositionX();
+            view.y = liveCreature->GetPositionY();
+            view.z = liveCreature->GetPositionZ();
+            view.level = liveCreature->GetLevel();
+            view.lastSeenAt = uint32(GameTime::GetGameTime().count());
+            view.threatClass = GetThreatClassForPlayer(player, state, view.level);
+        }
+        else
+        {
+            view.name = SanitizeAddonField(GetNemesisDisplayName(nullptr, spawnId, state));
+            if (CreatureTemplate const* creatureTemplate = sObjectMgr->GetCreatureTemplate(state.creatureEntry))
+                view.level = creatureTemplate->maxlevel;
+            view.threatClass = GetThreatClassForPlayer(player, state, view.level);
+        }
+
+        return view;
+    }
+
+    std::string BuildSnapshotEntryPayload(NemesisAddonView const& view)
+    {
+        return Acore::StringFormat(
+            "V1:SNAPSHOT_ENTRY:{}:{}:{}:{}:{}:{}:{:.2f}:{:.2f}:{:.2f}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+            uint64(view.spawnId),
+            view.creatureEntry,
+            view.name,
+            view.mapId,
+            view.zoneId,
+            view.zoneName,
+            view.x,
+            view.y,
+            view.z,
+            uint32(view.level),
+            uint32(view.rank),
+            view.rankTier,
+            view.affixMask,
+            view.affixText,
+            view.targetGuid,
+            view.targetName,
+            view.relation,
+            view.rewardClass,
+            view.threatClass,
+            view.lastSeenAt);
+    }
+
+    std::string BuildUpsertPayload(NemesisAddonView const& view)
+    {
+        return Acore::StringFormat(
+            "V1:UPSERT:{}:{}:{}:{}:{}:{}:{:.2f}:{:.2f}:{:.2f}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+            uint64(view.spawnId),
+            view.creatureEntry,
+            view.name,
+            view.mapId,
+            view.zoneId,
+            view.zoneName,
+            view.x,
+            view.y,
+            view.z,
+            uint32(view.level),
+            uint32(view.rank),
+            view.rankTier,
+            view.affixMask,
+            view.affixText,
+            view.targetGuid,
+            view.targetName,
+            view.relation,
+            view.rewardClass,
+            view.threatClass,
+            view.lastSeenAt);
+    }
+
+    void ForEachOnlinePlayer(std::function<void(Player*)> const& callback)
+    {
+        WorldSessionMgr::SessionMap const& sessionMap = sWorldSessionMgr->GetAllSessions();
+        for (WorldSessionMgr::SessionMap::const_iterator itr = sessionMap.begin(); itr != sessionMap.end(); ++itr)
+            if (Player* player = itr->second->GetPlayer())
+                callback(player);
+    }
+
+    void SendNemesisSnapshot(Player* player)
+    {
+        if (!player)
+            return;
+
+        EnsureCacheLoaded();
+        SendAddonPayload(player, Acore::StringFormat("V1:HELLO:waypoint|affixes|threat|reward|guildrel:{}:{}", ActiveNemeses.size(), uint32(GameTime::GetGameTime().count())));
+        SendAddonPayload(player, Acore::StringFormat("V1:SNAPSHOT_BEGIN:{}", ActiveNemeses.size()));
+
+        for (auto const& [spawnId, state] : ActiveNemeses)
+        {
+            NemesisAddonView const view = BuildAddonView(player, spawnId, state);
+            SendChunkedAddonPayload(player, BuildSnapshotEntryPayload(view));
+        }
+
+        SendAddonPayload(player, "V1:SNAPSHOT_END");
+    }
+
+    void BroadcastNemesisUpsert(ObjectGuid::LowType spawnId, NemesisState const& state)
+    {
+        ForEachOnlinePlayer([&](Player* player)
+        {
+            NemesisAddonView const view = BuildAddonView(player, spawnId, state);
+            SendChunkedAddonPayload(player, BuildUpsertPayload(view));
+        });
+    }
+
+    void BroadcastNemesisRemove(ObjectGuid::LowType spawnId, char const* reason)
+    {
+        ForEachOnlinePlayer([&](Player* player)
+        {
+            SendAddonPayload(player, Acore::StringFormat("V1:REMOVE:{}:{}", uint64(spawnId), reason));
+        });
+    }
+
     std::string GetNemesisCoordinates(Creature const* creature)
     {
         if (!creature)
@@ -409,7 +751,7 @@ namespace
         CacheLoaded = true;
 
         QueryResult result = CharacterDatabase.Query(
-            "SELECT `guid`, `creature_entry`, `map_id`, `rank`, `affix_mask`, `base_health`, `base_scale`, `base_melee_min_damage`, "
+            "SELECT `guid`, `creature_entry`, `map_id`, `pos_x`, `pos_y`, `pos_z`, `rank`, `affix_mask`, `base_health`, `base_scale`, `base_melee_min_damage`, "
             "`base_melee_max_damage`, `base_ranged_min_damage`, `base_ranged_max_damage`, `base_attack_time`, `base_range_attack_time`, `base_run_speed_rate`, `nemesis_target_guid`, `last_promotion_at`, `last_victim_guid`, "
             "UNIX_TIMESTAMP(`creation_date`) FROM `character_nemesis`");
         if (!result)
@@ -424,21 +766,25 @@ namespace
             NemesisState state;
             state.creatureEntry = fields[1].Get<uint32>();
             state.mapId = fields[2].Get<uint32>();
-            state.rank = fields[3].Get<uint8>();
-            state.affixMask = fields[4].Get<uint32>();
-            state.baseHealth = fields[5].Get<uint32>();
-            state.baseScale = fields[6].Get<float>();
-            state.baseMeleeMinDamage = fields[7].Get<float>();
-            state.baseMeleeMaxDamage = fields[8].Get<float>();
-            state.baseRangedMinDamage = fields[9].Get<float>();
-            state.baseRangedMaxDamage = fields[10].Get<float>();
-            state.baseAttackTime = fields[11].Get<uint32>();
-            state.baseRangeAttackTime = fields[12].Get<uint32>();
-            state.baseRunSpeedRate = fields[13].Get<float>();
-            state.targetGuid = fields[14].Get<uint32>();
-            state.lastPromotionAt = fields[15].Get<uint32>();
-            state.lastVictimGuid = fields[16].Get<uint32>();
-            state.createdAt = fields[17].Get<uint32>();
+            state.homeX = fields[3].Get<float>();
+            state.homeY = fields[4].Get<float>();
+            state.homeZ = fields[5].Get<float>();
+            state.rank = fields[6].Get<uint8>();
+            state.affixMask = fields[7].Get<uint32>();
+            state.baseHealth = fields[8].Get<uint32>();
+            state.baseScale = fields[9].Get<float>();
+            state.baseMeleeMinDamage = fields[10].Get<float>();
+            state.baseMeleeMaxDamage = fields[11].Get<float>();
+            state.baseRangedMinDamage = fields[12].Get<float>();
+            state.baseRangedMaxDamage = fields[13].Get<float>();
+            state.baseAttackTime = fields[14].Get<uint32>();
+            state.baseRangeAttackTime = fields[15].Get<uint32>();
+            state.baseRunSpeedRate = fields[16].Get<float>();
+            state.targetGuid = fields[17].Get<uint32>();
+            state.lastPromotionAt = fields[18].Get<uint32>();
+            state.lastVictimGuid = fields[19].Get<uint32>();
+            state.createdAt = fields[20].Get<uint32>();
+            state.lastSeenAt = state.createdAt;
 
             if (IsExpired(state))
             {
@@ -477,11 +823,17 @@ namespace
     {
         EnsureCacheLoaded();
 
-        float homeX = 0.0f;
-        float homeY = 0.0f;
-        float homeZ = 0.0f;
+        NemesisState storedState = state;
+        float homeX = storedState.homeX;
+        float homeY = storedState.homeY;
+        float homeZ = storedState.homeZ;
         float orientation = 0.0f;
         creature->GetHomePosition(homeX, homeY, homeZ, orientation);
+        storedState.homeX = homeX;
+        storedState.homeY = homeY;
+        storedState.homeZ = homeZ;
+        storedState.zoneId = creature->GetZoneId();
+        storedState.lastSeenAt = uint32(GameTime::GetGameTime().count());
 
         CharacterDatabase.Execute(
             "REPLACE INTO `character_nemesis` "
@@ -494,26 +846,26 @@ namespace
             homeX,
             homeY,
             homeZ,
-            state.rank,
-            state.affixMask,
-            state.baseHealth,
-            state.baseScale,
-            state.baseMeleeMinDamage,
-            state.baseMeleeMaxDamage,
-            state.baseRangedMinDamage,
-            state.baseRangedMaxDamage,
-            state.baseAttackTime,
-            state.baseRangeAttackTime,
-            state.baseRunSpeedRate,
-            state.targetGuid,
-            state.lastPromotionAt,
-            state.lastVictimGuid,
-            state.createdAt ? state.createdAt : uint32(GameTime::GetGameTime().count()));
+            storedState.rank,
+            storedState.affixMask,
+            storedState.baseHealth,
+            storedState.baseScale,
+            storedState.baseMeleeMinDamage,
+            storedState.baseMeleeMaxDamage,
+            storedState.baseRangedMinDamage,
+            storedState.baseRangedMaxDamage,
+            storedState.baseAttackTime,
+            storedState.baseRangeAttackTime,
+            storedState.baseRunSpeedRate,
+            storedState.targetGuid,
+            storedState.lastPromotionAt,
+            storedState.lastVictimGuid,
+            storedState.createdAt ? storedState.createdAt : uint32(GameTime::GetGameTime().count()));
 
-        ActiveNemeses[creature->GetSpawnId()] = state;
+        ActiveNemeses[creature->GetSpawnId()] = storedState;
     }
 
-    void DeleteNemesisState(ObjectGuid::LowType spawnId)
+    void DeleteNemesisState(ObjectGuid::LowType spawnId, char const* reason = "cleared")
     {
         if (!spawnId)
             return;
@@ -523,6 +875,7 @@ namespace
         ActiveNemeses.erase(spawnId);
         RegenTickAccumulators.erase(spawnId);
         CharacterDatabase.Execute("DELETE FROM `character_nemesis` WHERE `guid` = {}", uint64(spawnId));
+        BroadcastNemesisRemove(spawnId, reason);
     }
 
     NemesisState BuildInitialNemesisState(Creature* killer, Player* killed)
@@ -530,8 +883,12 @@ namespace
         NemesisState state;
         state.creatureEntry = killer->GetEntry();
         state.mapId = killer->GetMapId();
+        state.zoneId = killer->GetZoneId();
         state.rank = 1;
         state.affixMask = 0;
+        state.homeX = killer->GetPositionX();
+        state.homeY = killer->GetPositionY();
+        state.homeZ = killer->GetPositionZ();
         state.baseHealth = std::max<uint32>(1, killer->GetCreateHealth());
         state.baseScale = killer->GetNativeObjectScale();
         state.baseMeleeMinDamage = std::max<float>(BASE_MINDAMAGE, killer->GetWeaponDamageRange(BASE_ATTACK, MINDAMAGE, 0));
@@ -543,6 +900,7 @@ namespace
         state.baseRunSpeedRate = killer->GetSpeedRate(MOVE_RUN);
         state.targetGuid = killed->GetGUID().GetCounter();
         state.createdAt = uint32(GameTime::GetGameTime().count());
+        state.lastSeenAt = state.createdAt;
         return state;
     }
 
@@ -881,15 +1239,18 @@ namespace
 
         state.creatureEntry = killer->GetEntry();
         state.mapId = killer->GetMapId();
+        state.zoneId = killer->GetZoneId();
         state.targetGuid = killed->GetGUID().GetCounter();
         state.lastPromotionAt = now;
         state.lastVictimGuid = killed->GetGUID().GetCounter();
         state.createdAt = now;
+        state.lastSeenAt = now;
         RollAffixes(state);
 
         SaveNemesisState(killer, state);
         ApplyNemesisState(killer, state);
         killer->SetFullHealth();
+        BroadcastNemesisUpsert(killer->GetSpawnId(), ActiveNemeses[killer->GetSpawnId()]);
 
         if (ShouldAnnounceCreate() && state.rank >= GetAnnounceMinRank())
         {
@@ -959,6 +1320,12 @@ public:
             return;
 
         ApplyNemesisState(creature, state);
+        state.zoneId = creature->GetZoneId();
+        state.homeX = creature->GetPositionX();
+        state.homeY = creature->GetPositionY();
+        state.homeZ = creature->GetPositionZ();
+        state.lastSeenAt = uint32(GameTime::GetGameTime().count());
+        ActiveNemeses[creature->GetSpawnId()] = state;
     }
 
     void OnAllCreatureUpdate(Creature* creature, uint32 /*diff*/) override
@@ -974,7 +1341,7 @@ public:
             return;
 
         RegenTickAccumulators.erase(creature->GetSpawnId());
-        DeleteNemesisState(creature->GetSpawnId());
+        DeleteNemesisState(creature->GetSpawnId(), "dead");
     }
 };
 
@@ -1062,8 +1429,14 @@ public:
 
     ChatCommandTable GetCommands() const override
     {
+        static ChatCommandTable addonTable =
+        {
+            { "sync", HandleAddonSync, SEC_PLAYER, Console::No }
+        };
+
         static ChatCommandTable nemesisTable =
         {
+            { "addon", addonTable },
             { "debug", HandleDebug, SEC_GAMEMASTER, Console::No },
             { "info", HandleInfo, SEC_GAMEMASTER, Console::No },
             { "mark", HandleMark, SEC_GAMEMASTER, Console::No },
@@ -1081,6 +1454,19 @@ public:
         };
 
         return commandTable;
+    }
+
+    static bool HandleAddonSync(ChatHandler* handler)
+    {
+        Player* player = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
+        if (!player)
+        {
+            handler->PSendSysMessage("You must be logged in as a player to sync addon data.");
+            return true;
+        }
+
+        SendNemesisSnapshot(player);
+        return true;
     }
 
     static bool HandleDebug(ChatHandler* handler)

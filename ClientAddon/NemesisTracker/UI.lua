@@ -1,0 +1,551 @@
+NemesisTracker = NemesisTracker or {}
+local NT = NemesisTracker
+
+NT.UI = NT.UI or {}
+local UI = NT.UI
+
+local ROW_HEIGHT = 22
+local ROW_COUNT = 18
+local FILTERS = {
+    { key = "all", label = "All" },
+    { key = "own", label = "Own" },
+    { key = "party", label = "Party" },
+    { key = "guild", label = "Guild" },
+    { key = "public", label = "Public" },
+}
+
+local function clamp(value, minValue, maxValue)
+    if value < minValue then
+        return minValue
+    end
+    if value > maxValue then
+        return maxValue
+    end
+    return value
+end
+
+local function createBackdrop(frame)
+    frame:SetBackdrop({
+        bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true,
+        tileSize = 16,
+        edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 },
+    })
+    frame:SetBackdropColor(0, 0, 0, 0.9)
+end
+
+local function relationColor(relation)
+    if relation == "own" then
+        return 1.0, 0.2, 0.2
+    end
+    if relation == "party" then
+        return 0.3, 0.6, 1.0
+    end
+    if relation == "guild" then
+        return 0.2, 0.9, 0.4
+    end
+    return 1.0, 0.82, 0.0
+end
+
+local function threatColor(threat)
+    if threat == "extreme" then
+        return 1.0, 0.1, 0.1
+    end
+    if threat == "high" then
+        return 1.0, 0.45, 0.1
+    end
+    if threat == "medium" then
+        return 1.0, 0.82, 0.0
+    end
+    return 0.4, 1.0, 0.4
+end
+
+function UI:FormatLastSeen(lastSeenAt)
+    if not lastSeenAt or lastSeenAt <= 0 then
+        return "Unknown"
+    end
+
+    local age = math.max(0, time() - lastSeenAt)
+    if age < 60 then
+        return string.format("%ds ago", age)
+    end
+    if age < 3600 then
+        return string.format("%dm ago", math.floor(age / 60))
+    end
+    return string.format("%dh ago", math.floor(age / 3600))
+end
+
+function UI:RefreshStatus()
+    if not self.statusText then
+        return
+    end
+
+    local total = NT.data.filteredCount or #NT.data.ordered
+    local lastSync = NT.data.lastSyncAt > 0 and date("%H:%M:%S", NT.data.lastSyncAt) or "never"
+    local state = NT.data.connectionState or "idle"
+    local page = NT.data.page or 1
+    local maxPage = NT:GetMaxPage()
+    local filter = string.upper(NT.data.currentFilter or "all")
+    self.statusText:SetText(string.format("State: %s  Filter: %s  Tracked: %d  Page: %d/%d  Last Sync: %s", state, filter, total, page, maxPage, lastSync))
+
+    if self.pageText then
+        self.pageText:SetText(string.format("Page %d/%d", page, maxPage))
+    end
+
+    if self.prevPageButton then
+        if page > 1 then
+            self.prevPageButton:Enable()
+        else
+            self.prevPageButton:Disable()
+        end
+    end
+
+    if self.nextPageButton then
+        if page < maxPage then
+            self.nextPageButton:Enable()
+        else
+            self.nextPageButton:Disable()
+        end
+    end
+
+    if self.filterButtons then
+        for _, button in ipairs(self.filterButtons) do
+            if button.key == (NT.data.currentFilter or "all") then
+                button:Disable()
+            else
+                button:Enable()
+            end
+        end
+    end
+end
+
+function UI:RefreshList()
+    for index, row in ipairs(self.rows) do
+        local nemesis = NT:GetPagedNemesis(index)
+        if nemesis then
+            row.spawnId = nemesis.spawnId
+            row.nemesis = nemesis
+            row:Show()
+            local r, g, b = relationColor(nemesis.relation)
+            row.name:SetTextColor(r, g, b)
+            row.name:SetText(nemesis.name)
+            row.rank:SetText(string.format("R%d", nemesis.rank or 1))
+            row.zone:SetText(nemesis.zoneName or "Unknown")
+            row.lastSeen:SetText(self:FormatLastSeen(nemesis.lastSeenAt))
+            if NT.data.selectedSpawnId == nemesis.spawnId then
+                row:SetBackdropColor(0.25, 0.25, 0.35, 0.85)
+            else
+                row:SetBackdropColor(0.08, 0.08, 0.08, 0.75)
+            end
+        else
+            row.spawnId = nil
+            row.nemesis = nil
+            row:Hide()
+        end
+    end
+end
+
+function UI:RefreshDetails()
+    if not self.detailText then
+        return
+    end
+
+    local nemesis = NT:GetSelectedNemesis()
+    if not nemesis then
+        self.detailHeader:SetTextColor(1, 1, 1)
+        self.detailHeader:SetText("Nemesis Details")
+        self.detailText:SetText("No nemesis selected")
+        return
+    end
+
+    self.detailText:SetText(string.format(
+        "Name: %s\nLevel: %d\nRank: %d - %s\nZone: %s (%d)\nRelation: %s\nReward: %s\nThreat: %s\nTarget: %s (%d)\nAffixes: %s\nLast Seen: %s\nCoords: %.1f, %.1f, %.1f\nSpawn ID: %s",
+        nemesis.name or "Unknown",
+        nemesis.level or 0,
+        nemesis.rank or 1,
+        nemesis.rankTier or "Marked",
+        nemesis.zoneName or "Unknown",
+        nemesis.zoneId or 0,
+        nemesis.relation or "public",
+        nemesis.rewardClass or "none",
+        nemesis.threatClass or "low",
+        nemesis.targetName or "",
+        nemesis.targetGuid or 0,
+        nemesis.affixText or "None",
+        self:FormatLastSeen(nemesis.lastSeenAt),
+        nemesis.x or 0,
+        nemesis.y or 0,
+        nemesis.z or 0,
+        tostring(nemesis.spawnId or 0)
+    ))
+
+    local r, g, b = threatColor(nemesis.threatClass)
+    self.detailHeader:SetTextColor(r, g, b)
+    self.detailHeader:SetText(nemesis.name or "Nemesis")
+end
+
+function UI:RefreshMap()
+    if not self.canvas then
+        return
+    end
+
+    local zoom = NT.db.zoom or 1
+    local panX = NT.db.panX or 0
+    local panY = NT.db.panY or 0
+
+    if self.zoomText then
+        self.zoomText:SetText(string.format("Zoom %.1fx", zoom))
+    end
+
+    for _, marker in ipairs(self.markers) do
+        marker:Hide()
+    end
+
+    local width = self.canvas:GetWidth()
+    local height = self.canvas:GetHeight()
+    if width <= 0 or height <= 0 then
+        return
+    end
+
+    for index, nemesis in ipairs(NT.data.ordered) do
+        local marker = self.markers[index]
+        if not marker then
+            marker = CreateFrame("Button", nil, self.canvas)
+            marker:SetWidth(14)
+            marker:SetHeight(14)
+            marker.texture = marker:CreateTexture(nil, "ARTWORK")
+            marker.texture:SetAllPoints(marker)
+            marker:SetScript("OnClick", function(button)
+                NT:SelectNemesis(button.spawnId)
+            end)
+            marker:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+            marker:SetScript("OnEnter", function(button)
+                local target = NT.data.nemeses[button.spawnId]
+                if not target then
+                    return
+                end
+                GameTooltip:SetOwner(button, "ANCHOR_RIGHT")
+                GameTooltip:SetText(target.name or "Nemesis")
+                GameTooltip:AddLine(string.format("Level %d  Rank %d - %s", target.level or 0, target.rank or 1, target.rankTier or "Marked"), 1, 1, 1)
+                GameTooltip:AddLine(target.zoneName or "Unknown", 0.8, 0.8, 0.8)
+                GameTooltip:AddLine("Last Seen: " .. UI:FormatLastSeen(target.lastSeenAt), 0.7, 0.9, 0.7)
+                GameTooltip:AddLine("Reward: " .. (target.rewardClass or "none"), 0.8, 0.8, 0.2)
+                GameTooltip:AddLine("Threat: " .. (target.threatClass or "low"), 1.0, 0.4, 0.2)
+                GameTooltip:Show()
+            end)
+            marker:SetScript("OnLeave", function()
+                GameTooltip:Hide()
+            end)
+            self.markers[index] = marker
+        end
+
+        marker.spawnId = nemesis.spawnId
+        local x = clamp((0.5 + ((nemesis.x or 0) / 20000) * zoom) + panX, 0.03, 0.97)
+        local y = clamp((0.5 - ((nemesis.y or 0) / 20000) * zoom) + panY, 0.03, 0.97)
+        marker:ClearAllPoints()
+        marker:SetPoint("CENTER", self.canvas, "TOPLEFT", width * x, -(height * y))
+        marker:Show()
+
+        local r, g, b = relationColor(nemesis.relation)
+        marker.texture:SetTexture("Interface\\MINIMAP\\POIIcons")
+        marker.texture:SetTexCoord(0, 0.125, 0, 0.125)
+        marker.texture:SetVertexColor(r, g, b)
+        if NT.data.selectedSpawnId == nemesis.spawnId then
+            marker:SetScale(1.3)
+        else
+            marker:SetScale(1.0)
+        end
+    end
+end
+
+function UI:RefreshAll()
+    self:RefreshStatus()
+    self:RefreshList()
+    self:RefreshDetails()
+    self:RefreshMap()
+end
+
+function UI:CreateRow(parent, index)
+    local row = CreateFrame("Button", nil, parent)
+    row:SetHeight(ROW_HEIGHT)
+    row:SetWidth(250)
+    createBackdrop(row)
+    row:SetBackdropColor(0.08, 0.08, 0.08, 0.75)
+    if index == 1 then
+        row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
+    else
+        row:SetPoint("TOPLEFT", self.rows[index - 1], "BOTTOMLEFT", 0, -2)
+    end
+
+    row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.name:SetPoint("LEFT", row, "LEFT", 6, 0)
+    row.name:SetWidth(92)
+    row.name:SetJustifyH("LEFT")
+
+    row.rank = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.rank:SetPoint("LEFT", row.name, "RIGHT", 4, 0)
+    row.rank:SetWidth(28)
+
+    row.zone = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.zone:SetPoint("LEFT", row.rank, "RIGHT", 4, 0)
+    row.zone:SetWidth(64)
+    row.zone:SetJustifyH("LEFT")
+
+    row.lastSeen = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.lastSeen:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+    row.lastSeen:SetWidth(46)
+    row.lastSeen:SetJustifyH("RIGHT")
+
+    row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    row:SetScript("OnClick", function(button)
+        if button.spawnId then
+            NT:SelectNemesis(button.spawnId)
+        end
+    end)
+
+    row:SetScript("OnDoubleClick", function(button)
+        if not button.nemesis then
+            return
+        end
+
+        DEFAULT_CHAT_FRAME:AddMessage(string.format("Nemesis waypoint: %s - %s (%.1f, %.1f, %.1f)", button.nemesis.name or "Nemesis", button.nemesis.zoneName or "Unknown", button.nemesis.x or 0, button.nemesis.y or 0, button.nemesis.z or 0))
+    end)
+
+    row:SetScript("OnEnter", function(button)
+        if not button.nemesis then
+            return
+        end
+
+        local nemesis = button.nemesis
+        GameTooltip:SetOwner(button, "ANCHOR_RIGHT")
+        GameTooltip:SetText(nemesis.name or "Nemesis")
+        GameTooltip:AddLine(string.format("Level %d  Rank %d - %s", nemesis.level or 0, nemesis.rank or 1, nemesis.rankTier or "Marked"), 1, 1, 1)
+        GameTooltip:AddLine(string.format("Relation: %s", nemesis.relation or "public"), 0.7, 0.9, 1)
+        GameTooltip:AddLine(string.format("Reward: %s  Threat: %s", nemesis.rewardClass or "none", nemesis.threatClass or "low"), 1, 0.82, 0.2)
+        GameTooltip:AddLine(string.format("Zone: %s", nemesis.zoneName or "Unknown"), 0.85, 0.85, 0.85)
+        GameTooltip:AddLine("Last Seen: " .. self:FormatLastSeen(nemesis.lastSeenAt), 0.7, 0.9, 0.7)
+        GameTooltip:Show()
+    end)
+
+    row:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+
+    self.rows[index] = row
+end
+
+function UI:CreateFilterButton(parent, index, filterDef)
+    local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    button:SetWidth(54)
+    button:SetHeight(20)
+    if index == 1 then
+        button:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
+    else
+        button:SetPoint("LEFT", self.filterButtons[index - 1], "RIGHT", 4, 0)
+    end
+    button:SetText(filterDef.label)
+    button.key = filterDef.key
+    button:SetScript("OnClick", function()
+        NT:SetFilter(filterDef.key)
+    end)
+    self.filterButtons[index] = button
+end
+
+function UI:Create()
+    if self.frame then
+        return
+    end
+
+    local frame = CreateFrame("Frame", "NemesisTrackerFrame", UIParent)
+    frame:SetClampedToScreen(true)
+    frame:SetMovable(true)
+    frame:EnableMouse(true)
+    frame:RegisterForDrag("LeftButton")
+    frame:SetResizable(true)
+    frame:SetMinResize(860, 520)
+    frame:SetMaxResize(1400, 1000)
+    createBackdrop(frame)
+    frame:SetWidth(NT.db.window.width or 980)
+    frame:SetHeight(NT.db.window.height or 640)
+    frame:SetPoint(NT.db.window.point or "CENTER", UIParent, NT.db.window.relativePoint or "CENTER", NT.db.window.x or 0, NT.db.window.y or 0)
+    frame:SetScript("OnDragStart", function(self)
+        self:StartMoving()
+    end)
+    frame:SetScript("OnDragStop", function(self)
+        self:StopMovingOrSizing()
+        local point, _, relativePoint, x, y = self:GetPoint(1)
+        NT.db.window.point = point
+        NT.db.window.relativePoint = relativePoint
+        NT.db.window.x = x
+        NT.db.window.y = y
+    end)
+    frame:Hide()
+    self.frame = frame
+
+    local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", frame, "TOPLEFT", 14, -12)
+    title:SetText("Nemesis Tracker")
+
+    self.statusText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    self.statusText:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -44, -16)
+
+    local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
+    close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -4)
+
+    local sync = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    sync:SetWidth(90)
+    sync:SetHeight(22)
+    sync:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -40)
+    sync:SetText("Sync")
+    sync:SetScript("OnClick", function()
+        NT:RequestSync()
+    end)
+
+    local waypoint = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    waypoint:SetWidth(110)
+    waypoint:SetHeight(22)
+    waypoint:SetPoint("LEFT", sync, "RIGHT", 8, 0)
+    waypoint:SetText("Waypoint")
+    waypoint:SetScript("OnClick", function()
+        local nemesis = NT:GetSelectedNemesis()
+        if not nemesis then
+            return
+        end
+        DEFAULT_CHAT_FRAME:AddMessage(string.format("Nemesis waypoint: %s - %s (%.1f, %.1f, %.1f)", nemesis.name or "Nemesis", nemesis.zoneName or "Unknown", nemesis.x or 0, nemesis.y or 0, nemesis.z or 0))
+    end)
+
+    local filters = CreateFrame("Frame", nil, frame)
+    filters:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -68)
+    filters:SetWidth(320)
+    filters:SetHeight(22)
+    self.filterButtons = {}
+    for index, filterDef in ipairs(FILTERS) do
+        self:CreateFilterButton(filters, index, filterDef)
+    end
+
+    local list = CreateFrame("Frame", nil, frame)
+    list:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -96)
+    list:SetWidth(256)
+    list:SetHeight((ROW_HEIGHT + 2) * ROW_COUNT)
+    self.list = list
+
+    self.rows = {}
+    for index = 1, ROW_COUNT do
+        self:CreateRow(list, index)
+    end
+
+    local mapPanel = CreateFrame("Frame", nil, frame)
+    mapPanel:SetPoint("TOPLEFT", list, "TOPRIGHT", 12, 0)
+    mapPanel:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 160)
+    createBackdrop(mapPanel)
+    self.mapPanel = mapPanel
+
+    local canvas = CreateFrame("Frame", nil, mapPanel)
+    canvas:SetAllPoints(mapPanel)
+    canvas:EnableMouse(true)
+    canvas:SetScript("OnMouseWheel", function(_, delta)
+        NT.db.zoom = clamp((NT.db.zoom or 1) + (delta * 0.1), 0.4, 3.0)
+        UI:RefreshMap()
+    end)
+    canvas:SetScript("OnMouseDown", function(_, button)
+        if button == "LeftButton" then
+            canvas.isPanning = true
+            local x, y = GetCursorPosition()
+            canvas.panStartX = x
+            canvas.panStartY = y
+            canvas.basePanX = NT.db.panX or 0
+            canvas.basePanY = NT.db.panY or 0
+        end
+    end)
+    canvas:SetScript("OnMouseUp", function()
+        canvas.isPanning = nil
+    end)
+    canvas:SetScript("OnUpdate", function()
+        if not canvas.isPanning then
+            return
+        end
+        local x, y = GetCursorPosition()
+        local scale = UIParent:GetScale()
+        NT.db.panX = clamp((canvas.basePanX or 0) + ((x - canvas.panStartX) / scale) / 800, -0.8, 0.8)
+        NT.db.panY = clamp((canvas.basePanY or 0) - ((y - canvas.panStartY) / scale) / 800, -0.8, 0.8)
+        UI:RefreshMap()
+    end)
+    self.canvas = canvas
+
+    self.zoomText = mapPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    self.zoomText:SetPoint("TOPRIGHT", mapPanel, "TOPRIGHT", -8, -8)
+
+    local grid = canvas:CreateTexture(nil, "BACKGROUND")
+    grid:SetAllPoints(canvas)
+    grid:SetTexture(0.12, 0.12, 0.16, 0.95)
+
+    for index = 1, 9 do
+        local line = canvas:CreateTexture(nil, "BORDER")
+        line:SetTexture(0.2, 0.2, 0.24, 0.8)
+        line:SetPoint("TOPLEFT", canvas, "TOPLEFT", (index - 1) * 60, 0)
+        line:SetPoint("BOTTOMLEFT", canvas, "BOTTOMLEFT", (index - 1) * 60, 0)
+        line:SetWidth(1)
+    end
+
+    for index = 1, 6 do
+        local line = canvas:CreateTexture(nil, "BORDER")
+        line:SetTexture(0.2, 0.2, 0.24, 0.8)
+        line:SetPoint("TOPLEFT", canvas, "TOPLEFT", 0, -((index - 1) * 60))
+        line:SetPoint("TOPRIGHT", canvas, "TOPRIGHT", 0, -((index - 1) * 60))
+        line:SetHeight(1)
+    end
+
+    self.markers = {}
+
+    self.detailHeader = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    self.detailHeader:SetPoint("TOPLEFT", mapPanel, "BOTTOMLEFT", 4, -16)
+    self.detailHeader:SetText("Nemesis Details")
+
+    self.prevPageButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    self.prevPageButton:SetWidth(26)
+    self.prevPageButton:SetHeight(20)
+    self.prevPageButton:SetPoint("TOPLEFT", list, "BOTTOMLEFT", 0, -8)
+    self.prevPageButton:SetText("<")
+    self.prevPageButton:SetScript("OnClick", function()
+        NT:ChangePage(-1)
+    end)
+
+    self.pageText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    self.pageText:SetPoint("LEFT", self.prevPageButton, "RIGHT", 8, 0)
+    self.pageText:SetText("Page 1/1")
+
+    self.nextPageButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    self.nextPageButton:SetWidth(26)
+    self.nextPageButton:SetHeight(20)
+    self.nextPageButton:SetPoint("LEFT", self.pageText, "RIGHT", 8, 0)
+    self.nextPageButton:SetText(">")
+    self.nextPageButton:SetScript("OnClick", function()
+        NT:ChangePage(1)
+    end)
+
+    self.detailText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    self.detailText:SetPoint("TOPLEFT", self.detailHeader, "BOTTOMLEFT", 0, -8)
+    self.detailText:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -16, 14)
+    self.detailText:SetJustifyH("LEFT")
+    self.detailText:SetJustifyV("TOP")
+
+    local resize = CreateFrame("Button", nil, frame)
+    resize:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -4, 4)
+    resize:SetWidth(16)
+    resize:SetHeight(16)
+    resize:EnableMouse(true)
+    resize:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+    resize:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+    resize:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+    resize:SetScript("OnMouseDown", function()
+        frame:StartSizing("BOTTOMRIGHT")
+    end)
+    resize:SetScript("OnMouseUp", function()
+        frame:StopMovingOrSizing()
+        NT.db.window.width = frame:GetWidth()
+        NT.db.window.height = frame:GetHeight()
+        UI:RefreshMap()
+    end)
+end

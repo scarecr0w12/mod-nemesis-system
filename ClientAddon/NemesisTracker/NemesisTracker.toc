@@ -1,0 +1,9 @@
+## Interface: 30300
+## Title: NemesisTracker
+## Notes: Companion addon for mod-nemesis-system
+## Author: Cascade
+## Version: 0.1.0
+## SavedVariables: NemesisTrackerDB
+
+Core.lua
+UI.lua
