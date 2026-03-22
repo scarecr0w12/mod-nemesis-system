@@ -4,6 +4,8 @@
 ## Author: Cascade
 ## Version: 0.1.0
 ## SavedVariables: NemesisTrackerDB
+## OptionalDeps: Ace3
 
+MapData.lua
 Core.lua
 UI.lua

@@ -1,6 +1,6 @@
 local addonName = ...
 
-NemesisTracker = NemesisTracker or {}
+NemesisTracker = LibStub("AceAddon-3.0"):NewAddon("NemesisTracker", "AceConsole-3.0", "AceEvent-3.0", "AceTimer-3.0")
 local NT = NemesisTracker
 
 local RELATION_ORDER = { own = 1, party = 2, guild = 3, public = 4 }
@@ -21,9 +21,6 @@ NT.data = NT.data or {
     page = 1,
     filteredCount = 0,
 }
-
-local frame = CreateFrame("Frame")
-NT.frame = frame
 
 local function splitPreserveEmpty(message, delimiter)
     local result = {}
@@ -49,20 +46,6 @@ local function splitPreserveEmpty(message, delimiter)
     end
 
     return result
-end
-
-local function delay(seconds, callback)
-    local timer = CreateFrame("Frame")
-    local elapsed = 0
-    timer:SetScript("OnUpdate", function(self, diff)
-        elapsed = elapsed + diff
-        if elapsed < seconds then
-            return
-        end
-
-        self:SetScript("OnUpdate", nil)
-        callback()
-    end)
 end
 
 local function shouldIncludeNemesis(nemesis)
@@ -177,8 +160,8 @@ function NT:CenterOnNemesis(spawnId)
         return
     end
 
-    self.db.panX = -((nemesis.x or 0) / 20000) * (self.db.zoom or 1)
-    self.db.panY = ((nemesis.y or 0) / 20000) * (self.db.zoom or 1)
+    self.db.panX = (0.5 - (nemesis.mapX or 0.5)) * (self.db.zoom or 1)
+    self.db.panY = (0.5 - (nemesis.mapY or 0.5)) * (self.db.zoom or 1)
     self.db.panX = math.max(-0.8, math.min(0.8, self.db.panX))
     self.db.panY = math.max(-0.8, math.min(0.8, self.db.panY))
 end
@@ -236,17 +219,19 @@ function NT:UpsertNemesis(fields)
     nemesis.x = tonumber(fields[9]) or 0
     nemesis.y = tonumber(fields[10]) or 0
     nemesis.z = tonumber(fields[11]) or 0
-    nemesis.level = tonumber(fields[12]) or 0
-    nemesis.rank = tonumber(fields[13]) or 1
-    nemesis.rankTier = fields[14] or "Marked"
-    nemesis.affixMask = tonumber(fields[15]) or 0
-    nemesis.affixText = fields[16] or "None"
-    nemesis.targetGuid = tonumber(fields[17]) or 0
-    nemesis.targetName = fields[18] or ""
-    nemesis.relation = normalizeRelation(fields[19])
-    nemesis.rewardClass = fields[20] or "none"
-    nemesis.threatClass = fields[21] or "low"
-    nemesis.lastSeenAt = tonumber(fields[22]) or 0
+    nemesis.mapX = tonumber(fields[12]) or 0.5
+    nemesis.mapY = tonumber(fields[13]) or 0.5
+    nemesis.level = tonumber(fields[14]) or 0
+    nemesis.rank = tonumber(fields[15]) or 1
+    nemesis.rankTier = fields[16] or "Marked"
+    nemesis.affixMask = tonumber(fields[17]) or 0
+    nemesis.affixText = fields[18] or "None"
+    nemesis.targetGuid = tonumber(fields[19]) or 0
+    nemesis.targetName = fields[20] or ""
+    nemesis.relation = normalizeRelation(fields[21])
+    nemesis.rewardClass = fields[22] or "none"
+    nemesis.threatClass = fields[23] or "low"
+    nemesis.lastSeenAt = tonumber(fields[24]) or 0
     nemesis.removeReason = nil
     self.data.nemeses[spawnId] = nemesis
 
@@ -429,12 +414,17 @@ function NT:ToggleWindow()
 end
 
 function NT:InitializeDatabase()
-    NemesisTrackerDB = NemesisTrackerDB or {}
-    NemesisTrackerDB.window = NemesisTrackerDB.window or { point = "CENTER", relativePoint = "CENTER", x = 0, y = 0, width = 980, height = 640 }
-    NemesisTrackerDB.zoom = NemesisTrackerDB.zoom or 1
-    NemesisTrackerDB.panX = NemesisTrackerDB.panX or 0
-    NemesisTrackerDB.panY = NemesisTrackerDB.panY or 0
-    self.db = NemesisTrackerDB
+    local defaults = {
+        profile = {
+            window = { point = "CENTER", relativePoint = "CENTER", x = 0, y = 0, width = 980, height = 640 },
+            zoom = 1,
+            panX = 0,
+            panY = 0,
+        },
+    }
+
+    self.database = LibStub("AceDB-3.0"):New("NemesisTrackerDB", defaults, true)
+    self.db = self.database.profile
 end
 
 function NT:SlashCommand(input)
@@ -447,57 +437,55 @@ function NT:SlashCommand(input)
     self:ToggleWindow()
 end
 
-frame:SetScript("OnUpdate", function(_, elapsed)
-    NT._elapsed = (NT._elapsed or 0) + elapsed
-    if NT._elapsed < 1 then
-        return
+function NT:RefreshVisibleUI()
+    if self.UI and self.UI.frame and self.UI.frame:IsShown() then
+        self.UI:RefreshStatus()
+        self.UI:RefreshList()
+        self.UI:RefreshDetails()
     end
-
-    NT._elapsed = 0
-    if NT.UI and NT.UI.frame and NT.UI.frame:IsShown() then
-        NT.UI:RefreshStatus()
-        NT.UI:RefreshList()
-        NT.UI:RefreshDetails()
-    end
-end)
-
-frame:SetScript("OnEvent", function(_, event, ...)
-    if event == "ADDON_LOADED" then
-        local loadedAddon = ...
-        if loadedAddon ~= addonName then
-            return
-        end
-
-        NT:InitializeDatabase()
-        if NT.UI then
-            NT.UI:Create()
-            NT.UI:RefreshAll()
-        end
-    elseif event == "PLAYER_ENTERING_WORLD" then
-        delay(2, function()
-            NT:RequestSync()
-        end)
-    elseif event == "CHAT_MSG_SYSTEM" then
-        NT:HandleSystemMessage(...)
-    elseif event == "CHAT_MSG_ADDON" then
-        local prefix, message = ...
-        if prefix == NT.prefix then
-            NT:ParsePayload(message)
-        end
-    end
-end)
-
-frame:RegisterEvent("ADDON_LOADED")
-frame:RegisterEvent("PLAYER_ENTERING_WORLD")
-frame:RegisterEvent("CHAT_MSG_SYSTEM")
-frame:RegisterEvent("CHAT_MSG_ADDON")
-
-if RegisterAddonMessagePrefix then
-    RegisterAddonMessagePrefix(NT.prefix)
 end
 
-SLASH_NEMESISTRACKER1 = "/nemesistracker"
-SLASH_NEMESISTRACKER2 = "/ntrack"
-SlashCmdList["NEMESISTRACKER"] = function(input)
-    NT:SlashCommand(input)
+function NT:OnInitialize()
+    self:InitializeDatabase()
+    if self.UI then
+        self.UI:Create()
+        self.UI:RefreshAll()
+    end
+
+    self:RegisterChatCommand("nemesistracker", "SlashCommand")
+    self:RegisterChatCommand("ntrack", "SlashCommand")
+
+    if RegisterAddonMessagePrefix then
+        RegisterAddonMessagePrefix(self.prefix)
+    end
+end
+
+function NT:OnEnable()
+    self:RegisterEvent("PLAYER_ENTERING_WORLD")
+    self:RegisterEvent("CHAT_MSG_SYSTEM")
+    self:RegisterEvent("CHAT_MSG_ADDON")
+    self.refreshTimer = self:ScheduleRepeatingTimer("RefreshVisibleUI", 1)
+end
+
+function NT:OnDisable()
+    if self.refreshTimer then
+        self:CancelTimer(self.refreshTimer)
+        self.refreshTimer = nil
+    end
+end
+
+function NT:PLAYER_ENTERING_WORLD()
+    self:ScheduleTimer(function()
+        self:RequestSync()
+    end, 2)
+end
+
+function NT:CHAT_MSG_SYSTEM(_, message)
+    self:HandleSystemMessage(message)
+end
+
+function NT:CHAT_MSG_ADDON(_, prefix, message)
+    if prefix == self.prefix then
+        self:ParsePayload(message)
+    end
 end

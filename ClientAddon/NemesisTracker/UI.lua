@@ -62,6 +62,81 @@ local function threatColor(threat)
     return 0.4, 1.0, 0.4
 end
 
+local function getDisplayedNemesis()
+    local selected = NT:GetSelectedNemesis()
+    if selected then
+        return selected
+    end
+
+    return NT.data.ordered[1]
+end
+
+local function getDisplayedZoneInfo()
+    local nemesis = getDisplayedNemesis()
+    if not nemesis then
+        return nil, nil, nil
+    end
+
+    return nemesis, nemesis.zoneId, nemesis.zoneName
+end
+
+function UI:EnsureMapTiles()
+    if self.mapTiles then
+        return
+    end
+
+    self.mapTiles = {}
+    for index = 1, NT.MapData.tileCount do
+        local tile = self.canvas:CreateTexture(nil, "BACKGROUND")
+        tile:SetTexture(nil)
+        tile:Hide()
+        self.mapTiles[index] = tile
+    end
+end
+
+function UI:RefreshMapTiles(width, height, zoneId, zoneName)
+    self:EnsureMapTiles()
+
+    local tileWidth = width / NT.MapData.tileColumns
+    local tileHeight = height / NT.MapData.tileRows
+    local hasTexture = false
+
+    for index, tile in ipairs(self.mapTiles) do
+        local texturePath = NT.MapData:GetTileTexture(zoneId, zoneName, index)
+        if texturePath then
+            local column = math.mod(index - 1, NT.MapData.tileColumns)
+            local row = math.floor((index - 1) / NT.MapData.tileColumns)
+            tile:ClearAllPoints()
+            tile:SetPoint("TOPLEFT", self.canvas, "TOPLEFT", column * tileWidth, -(row * tileHeight))
+            tile:SetWidth(tileWidth)
+            tile:SetHeight(tileHeight)
+            tile:SetTexture(texturePath)
+            tile:SetTexCoord(0, 1, 0, 1)
+            tile:Show()
+            hasTexture = true
+        else
+            tile:SetTexture(nil)
+            tile:Hide()
+        end
+    end
+
+    if self.mapFallback then
+        if hasTexture then
+            self.mapFallback:Hide()
+        else
+            self.mapFallback:Show()
+        end
+    end
+
+    if self.mapZoneText then
+        if zoneName and zoneName ~= "" then
+            self.mapZoneText:SetText(zoneName)
+        else
+            self.mapZoneText:SetText("No zone selected")
+        end
+    end
+end
+
 function UI:FormatLastSeen(lastSeenAt)
     if not lastSeenAt or lastSeenAt <= 0 then
         return "Unknown"
@@ -194,6 +269,7 @@ function UI:RefreshMap()
     local zoom = NT.db.zoom or 1
     local panX = NT.db.panX or 0
     local panY = NT.db.panY or 0
+    local _, displayedZoneId, displayedZoneName = getDisplayedZoneInfo()
 
     if self.zoomText then
         self.zoomText:SetText(string.format("Zoom %.1fx", zoom))
@@ -209,53 +285,57 @@ function UI:RefreshMap()
         return
     end
 
+    self:RefreshMapTiles(width, height, displayedZoneId, displayedZoneName)
+
     for index, nemesis in ipairs(NT.data.ordered) do
-        local marker = self.markers[index]
-        if not marker then
-            marker = CreateFrame("Button", nil, self.canvas)
-            marker:SetWidth(14)
-            marker:SetHeight(14)
-            marker.texture = marker:CreateTexture(nil, "ARTWORK")
-            marker.texture:SetAllPoints(marker)
-            marker:SetScript("OnClick", function(button)
-                NT:SelectNemesis(button.spawnId)
-            end)
-            marker:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-            marker:SetScript("OnEnter", function(button)
-                local target = NT.data.nemeses[button.spawnId]
-                if not target then
-                    return
-                end
-                GameTooltip:SetOwner(button, "ANCHOR_RIGHT")
-                GameTooltip:SetText(target.name or "Nemesis")
-                GameTooltip:AddLine(string.format("Level %d  Rank %d - %s", target.level or 0, target.rank or 1, target.rankTier or "Marked"), 1, 1, 1)
-                GameTooltip:AddLine(target.zoneName or "Unknown", 0.8, 0.8, 0.8)
-                GameTooltip:AddLine("Last Seen: " .. UI:FormatLastSeen(target.lastSeenAt), 0.7, 0.9, 0.7)
-                GameTooltip:AddLine("Reward: " .. (target.rewardClass or "none"), 0.8, 0.8, 0.2)
-                GameTooltip:AddLine("Threat: " .. (target.threatClass or "low"), 1.0, 0.4, 0.2)
-                GameTooltip:Show()
-            end)
-            marker:SetScript("OnLeave", function()
-                GameTooltip:Hide()
-            end)
-            self.markers[index] = marker
-        end
+        if not displayedZoneId or nemesis.zoneId == displayedZoneId then
+            local marker = self.markers[index]
+            if not marker then
+                marker = CreateFrame("Button", nil, self.canvas)
+                marker:SetWidth(14)
+                marker:SetHeight(14)
+                marker.texture = marker:CreateTexture(nil, "ARTWORK")
+                marker.texture:SetAllPoints(marker)
+                marker:SetScript("OnClick", function(button)
+                    NT:SelectNemesis(button.spawnId)
+                end)
+                marker:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+                marker:SetScript("OnEnter", function(button)
+                    local target = NT.data.nemeses[button.spawnId]
+                    if not target then
+                        return
+                    end
+                    GameTooltip:SetOwner(button, "ANCHOR_RIGHT")
+                    GameTooltip:SetText(target.name or "Nemesis")
+                    GameTooltip:AddLine(string.format("Level %d  Rank %d - %s", target.level or 0, target.rank or 1, target.rankTier or "Marked"), 1, 1, 1)
+                    GameTooltip:AddLine(target.zoneName or "Unknown", 0.8, 0.8, 0.8)
+                    GameTooltip:AddLine("Last Seen: " .. UI:FormatLastSeen(target.lastSeenAt), 0.7, 0.9, 0.7)
+                    GameTooltip:AddLine("Reward: " .. (target.rewardClass or "none"), 0.8, 0.8, 0.2)
+                    GameTooltip:AddLine("Threat: " .. (target.threatClass or "low"), 1.0, 0.4, 0.2)
+                    GameTooltip:Show()
+                end)
+                marker:SetScript("OnLeave", function()
+                    GameTooltip:Hide()
+                end)
+                self.markers[index] = marker
+            end
 
-        marker.spawnId = nemesis.spawnId
-        local x = clamp((0.5 + ((nemesis.x or 0) / 20000) * zoom) + panX, 0.03, 0.97)
-        local y = clamp((0.5 - ((nemesis.y or 0) / 20000) * zoom) + panY, 0.03, 0.97)
-        marker:ClearAllPoints()
-        marker:SetPoint("CENTER", self.canvas, "TOPLEFT", width * x, -(height * y))
-        marker:Show()
+            marker.spawnId = nemesis.spawnId
+            local x = clamp((0.5 + (((nemesis.mapX or 0.5) - 0.5) * zoom) + panX), 0.03, 0.97)
+            local y = clamp((0.5 + (((nemesis.mapY or 0.5) - 0.5) * zoom) + panY), 0.03, 0.97)
+            marker:ClearAllPoints()
+            marker:SetPoint("CENTER", self.canvas, "TOPLEFT", width * x, -(height * y))
+            marker:Show()
 
-        local r, g, b = relationColor(nemesis.relation)
-        marker.texture:SetTexture("Interface\\MINIMAP\\POIIcons")
-        marker.texture:SetTexCoord(0, 0.125, 0, 0.125)
-        marker.texture:SetVertexColor(r, g, b)
-        if NT.data.selectedSpawnId == nemesis.spawnId then
-            marker:SetScale(1.3)
-        else
-            marker:SetScale(1.0)
+            local r, g, b = relationColor(nemesis.relation)
+            marker.texture:SetTexture("Interface\\MINIMAP\\POIIcons")
+            marker.texture:SetTexCoord(0, 0.125, 0, 0.125)
+            marker.texture:SetVertexColor(r, g, b)
+            if NT.data.selectedSpawnId == nemesis.spawnId then
+                marker:SetScale(1.3)
+            else
+                marker:SetScale(1.0)
+            end
         end
     end
 end
@@ -477,25 +557,12 @@ function UI:Create()
     self.zoomText = mapPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     self.zoomText:SetPoint("TOPRIGHT", mapPanel, "TOPRIGHT", -8, -8)
 
-    local grid = canvas:CreateTexture(nil, "BACKGROUND")
-    grid:SetAllPoints(canvas)
-    grid:SetTexture(0.12, 0.12, 0.16, 0.95)
+    self.mapZoneText = mapPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    self.mapZoneText:SetPoint("TOPLEFT", mapPanel, "TOPLEFT", 8, -8)
 
-    for index = 1, 9 do
-        local line = canvas:CreateTexture(nil, "BORDER")
-        line:SetTexture(0.2, 0.2, 0.24, 0.8)
-        line:SetPoint("TOPLEFT", canvas, "TOPLEFT", (index - 1) * 60, 0)
-        line:SetPoint("BOTTOMLEFT", canvas, "BOTTOMLEFT", (index - 1) * 60, 0)
-        line:SetWidth(1)
-    end
-
-    for index = 1, 6 do
-        local line = canvas:CreateTexture(nil, "BORDER")
-        line:SetTexture(0.2, 0.2, 0.24, 0.8)
-        line:SetPoint("TOPLEFT", canvas, "TOPLEFT", 0, -((index - 1) * 60))
-        line:SetPoint("TOPRIGHT", canvas, "TOPRIGHT", 0, -((index - 1) * 60))
-        line:SetHeight(1)
-    end
+    self.mapFallback = canvas:CreateTexture(nil, "BACKGROUND")
+    self.mapFallback:SetAllPoints(canvas)
+    self.mapFallback:SetTexture(0.12, 0.12, 0.16, 0.95)
 
     self.markers = {}
 

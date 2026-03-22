@@ -79,6 +79,8 @@ namespace
         float x = 0.0f;
         float y = 0.0f;
         float z = 0.0f;
+        float mapX = 0.5f;
+        float mapY = 0.5f;
         uint8 level = 0;
         uint8 rank = 1;
         std::string rankTier;
@@ -553,13 +555,22 @@ namespace
             view.threatClass = GetThreatClassForPlayer(player, state, view.level);
         }
 
+        if (view.zoneId != 0)
+        {
+            float normalizedX = view.x;
+            float normalizedY = view.y;
+            Map2ZoneCoordinates(normalizedX, normalizedY, view.zoneId);
+            view.mapX = std::clamp(normalizedX / 100.0f, 0.0f, 1.0f);
+            view.mapY = std::clamp(normalizedY / 100.0f, 0.0f, 1.0f);
+        }
+
         return view;
     }
 
     std::string BuildSnapshotEntryPayload(NemesisAddonView const& view)
     {
         return Acore::StringFormat(
-            "V1:SNAPSHOT_ENTRY:{}:{}:{}:{}:{}:{}:{:.2f}:{:.2f}:{:.2f}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+            "V1:SNAPSHOT_ENTRY:{}:{}:{}:{}:{}:{}:{:.2f}:{:.2f}:{:.2f}:{:.4f}:{:.4f}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
             uint64(view.spawnId),
             view.creatureEntry,
             view.name,
@@ -569,6 +580,8 @@ namespace
             view.x,
             view.y,
             view.z,
+            view.mapX,
+            view.mapY,
             uint32(view.level),
             uint32(view.rank),
             view.rankTier,
@@ -585,7 +598,7 @@ namespace
     std::string BuildUpsertPayload(NemesisAddonView const& view)
     {
         return Acore::StringFormat(
-            "V1:UPSERT:{}:{}:{}:{}:{}:{}:{:.2f}:{:.2f}:{:.2f}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+            "V1:UPSERT:{}:{}:{}:{}:{}:{}:{:.2f}:{:.2f}:{:.2f}:{:.4f}:{:.4f}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
             uint64(view.spawnId),
             view.creatureEntry,
             view.name,
@@ -595,6 +608,8 @@ namespace
             view.x,
             view.y,
             view.z,
+            view.mapX,
+            view.mapY,
             uint32(view.level),
             uint32(view.rank),
             view.rankTier,
