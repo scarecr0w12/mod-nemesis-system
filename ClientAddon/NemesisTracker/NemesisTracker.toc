@@ -2,7 +2,7 @@
 ## Title: NemesisTracker
 ## Notes: Companion addon for mod-nemesis-system
 ## Author: Cascade
-## Version: 0.1.0
+## Version: 0.2.0
 ## SavedVariables: NemesisTrackerDB
 ## OptionalDeps: Ace3
 

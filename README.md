@@ -39,7 +39,7 @@ This scaffold implements the first vertical slice:
 
 1. Build AzerothCore with the module enabled.
 2. Import `data/sql/db-characters/base/nemesis_system.sql` into the characters database.
-  - Existing installs should also apply `data/sql/db-characters/updates/2026_03_22_00_nemesis_last_seen.sql`.
+   - Existing installs should also apply `data/sql/db-characters/updates/2026_03_22_00_nemesis_last_seen.sql`.
 3. Copy `conf/mod_nemesis_system.conf.dist` to your server config directory if needed.
 4. Restart `worldserver`.
 
