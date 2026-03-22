@@ -1,5 +1,7 @@
 # Nemesis System Module
 
+![Nemesis System Banner](doc/assets/nemesis-banner.svg)
+
 ## Overview
 
 `mod-nemesis-system` turns selected open-world PvE deaths into persistent revenge targets.
@@ -21,6 +23,8 @@ This scaffold implements the first vertical slice:
 - configurable announcements for creation, rank-up, and kill events
 - anti-feed cooldowns for repeated promotions and same-victim farming
 - initial companion addon transport and client scaffold for live nemesis tracking
+
+![Nemesis System Emblem](doc/assets/nemesis-emblem.svg)
 
 ## Files
 
@@ -152,3 +156,9 @@ Current limitations:
 1. Add additional affixes and spell-driven visuals.
 2. Add richer reward presentation and optional reward messaging.
 3. Integrate with optional autobalance hooks.
+
+## Branding Assets
+
+![Nemesis System Icon](doc/assets/nemesis-icon.svg)
+
+![Nemesis System Promo](doc/assets/nemesis-promo.svg)
