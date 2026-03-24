@@ -9,6 +9,10 @@ When an eligible creature kills a player, the creature is promoted into a Nemesi
 gains rank-based scaling, and is persisted in the characters database so the state
 survives creature unloads and server restarts.
 
+Optional City Siege integration can also promote active siege attackers and defenders
+after they kill a real player. Because siege creatures are temporary summons, those
+siege-created nemeses are runtime-only and are cleared when the creature dies or despawns.
+
 This scaffold implements the first vertical slice:
 
 - player-death trigger using `OnPlayerKilledByCreature`
@@ -72,6 +76,8 @@ Additional affix behavior:
 - `NemesisSystem.AllowWorldBoss`
 - `NemesisSystem.PromotionLevelDiffMax`
 - `NemesisSystem.TrivialKillLevelDelta`
+- `NemesisSystem.CitySiegeIntegration.Enable`
+- `NemesisSystem.CitySiegeIntegration.Chance`
 
 ## Anti-Feed Config
 

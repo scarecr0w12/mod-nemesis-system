@@ -1,6 +1,7 @@
 #include "AllCreatureScript.h"
 #include "Chat.h"
 #include "CharacterCache.h"
+#include "CitySiegeAPI.h"
 #include "CommandScript.h"
 #include "Config.h"
 #include "Creature.h"
@@ -18,6 +19,10 @@
 #include "UnitScript.h"
 #include "WorldPacket.h"
 #include "WorldSessionMgr.h"
+
+#ifdef MOD_PLAYERBOTS
+#include "PlayerbotMgr.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -97,9 +102,13 @@ namespace
 
     using NemesisStore = std::unordered_map<ObjectGuid::LowType, NemesisState>;
     using NemesisTickStore = std::unordered_map<ObjectGuid::LowType, uint32>;
+    using TemporaryNemesisStore = std::unordered_map<ObjectGuid, NemesisState>;
+    using TemporaryNemesisTickStore = std::unordered_map<ObjectGuid, uint32>;
 
     NemesisStore ActiveNemeses;
     NemesisTickStore RegenTickAccumulators;
+    TemporaryNemesisStore ActiveTemporaryNemeses;
+    TemporaryNemesisTickStore TemporaryRegenTickAccumulators;
     bool CacheLoaded = false;
 
     std::string constexpr NEMESIS_ADDON_PREFIX = "Nemesis";
@@ -113,6 +122,16 @@ namespace
     bool IsEnabled()
     {
         return sConfigMgr->GetOption<bool>("NemesisSystem.Enable", true);
+    }
+
+    bool IsCitySiegeIntegrationEnabled()
+    {
+        return sConfigMgr->GetOption<bool>("NemesisSystem.CitySiegeIntegration.Enable", false);
+    }
+
+    float GetCitySiegePromotionChance()
+    {
+        return std::clamp(sConfigMgr->GetOption<float>("NemesisSystem.CitySiegeIntegration.Chance", 10.0f), 0.0f, 100.0f);
     }
 
     uint8 GetMaxRank()
@@ -228,6 +247,29 @@ namespace
     uint32 GetAddonReportCooldownSeconds()
     {
         return sConfigMgr->GetOption<uint32>("NemesisSystem.AddonReportCooldownSeconds", 30);
+    }
+
+    bool IsPlayerbotVictim(Player* player)
+    {
+#ifdef MOD_PLAYERBOTS
+        return player && sPlayerbotsMgr.GetPlayerbotAI(player) != nullptr;
+#else
+        (void)player;
+        return false;
+#endif
+    }
+
+    CitySiegeAPI::SiegeParticipantRole GetCitySiegeRole(Creature const* creature)
+    {
+        if (!creature)
+            return CitySiegeAPI::SiegeParticipantRole::None;
+
+        return CitySiegeAPI::GetActiveCreatureRole(creature->GetGUID());
+    }
+
+    bool IsTemporaryNemesisCandidate(Creature const* creature)
+    {
+        return creature && !creature->GetSpawnId() && GetCitySiegeRole(creature) != CitySiegeAPI::SiegeParticipantRole::None;
     }
 
     bool HasAffix(NemesisState const& state, NemesisAffix affix)
@@ -943,8 +985,39 @@ namespace
         return true;
     }
 
+    bool TryGetNemesisState(Creature* creature, NemesisState& state)
+    {
+        if (!creature)
+            return false;
+
+        if (ObjectGuid::LowType const spawnId = creature->GetSpawnId())
+            return TryGetNemesisState(spawnId, state);
+
+        TemporaryNemesisStore::iterator itr = ActiveTemporaryNemeses.find(creature->GetGUID());
+        if (itr == ActiveTemporaryNemeses.end())
+            return false;
+
+        state = itr->second;
+        return true;
+    }
+
     void SaveNemesisState(Creature* creature, NemesisState const& state)
     {
+        if (!creature)
+            return;
+
+        if (!creature->GetSpawnId())
+        {
+            NemesisState storedState = state;
+            storedState.homeX = creature->GetPositionX();
+            storedState.homeY = creature->GetPositionY();
+            storedState.homeZ = creature->GetPositionZ();
+            storedState.zoneId = creature->GetZoneId();
+            storedState.lastSeenAt = storedState.lastSeenAt ? storedState.lastSeenAt : uint32(GameTime::GetGameTime().count());
+            ActiveTemporaryNemeses[creature->GetGUID()] = storedState;
+            return;
+        }
+
         EnsureCacheLoaded();
 
         NemesisState storedState = state;
@@ -1000,6 +1073,49 @@ namespace
         RegenTickAccumulators.erase(spawnId);
         CharacterDatabase.Execute("DELETE FROM `character_nemesis` WHERE `guid` = {}", uint64(spawnId));
         BroadcastNemesisRemove(spawnId, reason);
+    }
+
+    void DeleteNemesisState(Creature* creature, char const* reason = "cleared")
+    {
+        if (!creature)
+            return;
+
+        if (ObjectGuid::LowType const spawnId = creature->GetSpawnId())
+        {
+            DeleteNemesisState(spawnId, reason);
+            return;
+        }
+
+        ActiveTemporaryNemeses.erase(creature->GetGUID());
+        TemporaryRegenTickAccumulators.erase(creature->GetGUID());
+        (void)reason;
+    }
+
+    void EraseRegenAccumulator(Creature* creature)
+    {
+        if (!creature)
+            return;
+
+        if (ObjectGuid::LowType const spawnId = creature->GetSpawnId())
+            RegenTickAccumulators.erase(spawnId);
+        else
+            TemporaryRegenTickAccumulators.erase(creature->GetGUID());
+    }
+
+    uint32& GetRegenAccumulator(Creature* creature)
+    {
+        if (ObjectGuid::LowType const spawnId = creature->GetSpawnId())
+            return RegenTickAccumulators[spawnId];
+
+        return TemporaryRegenTickAccumulators[creature->GetGUID()];
+    }
+
+    void BroadcastRankFiveNemesisIfPersistent(Creature* creature, NemesisState const& state)
+    {
+        if (!creature || !creature->GetSpawnId())
+            return;
+
+        BroadcastRankFiveNemesis(creature->GetSpawnId(), state);
     }
 
     NemesisState BuildInitialNemesisState(Creature* killer, Player* killed)
@@ -1232,6 +1348,25 @@ namespace
         if (!IsEnabled() || !killer || !killed)
             return false;
 
+        if (GetCitySiegeRole(killer) != CitySiegeAPI::SiegeParticipantRole::None)
+        {
+            if (!IsCitySiegeIntegrationEnabled() || !killer->IsInWorld() || IsPlayerbotVictim(killed))
+                return false;
+
+            NemesisState state;
+            if (TryGetNemesisState(killer, state))
+            {
+                if (GetRankUpCooldownRemaining(state) > 0)
+                    return false;
+
+                if (GetSameVictimCooldownRemaining(state, killed->GetGUID().GetCounter()) > 0)
+                    return false;
+            }
+
+            float const chance = GetCitySiegePromotionChance();
+            return chance > 0.0f && (chance >= 100.0f || roll_chance_f(chance));
+        }
+
         if (!killer->IsInWorld() || !killer->GetSpawnId())
             return false;
 
@@ -1349,7 +1484,7 @@ namespace
     void PromoteNemesis(Creature* killer, Player* killed)
     {
         NemesisState state;
-        bool const existed = TryGetNemesisState(killer->GetSpawnId(), state);
+        bool const existed = TryGetNemesisState(killer, state);
         uint8 const previousRank = state.rank;
         uint32 const now = uint32(GameTime::GetGameTime().count());
 
@@ -1374,7 +1509,7 @@ namespace
         SaveNemesisState(killer, state);
         ApplyNemesisState(killer, state);
         killer->SetFullHealth();
-        BroadcastRankFiveNemesis(killer->GetSpawnId(), ActiveNemeses[killer->GetSpawnId()]);
+        BroadcastRankFiveNemesisIfPersistent(killer, state);
 
         if (ShouldAnnounceCreate() && state.rank >= GetAnnounceMinRank())
         {
@@ -1406,7 +1541,7 @@ public:
             return;
 
         NemesisState state;
-        if (!TryGetNemesisState(killed->GetSpawnId(), state))
+        if (!TryGetNemesisState(killed, state))
             return;
 
         bool const revenge = IsRevengeKill(killer, state);
@@ -1440,7 +1575,7 @@ public:
     void OnCreatureAddWorld(Creature* creature) override
     {
         NemesisState state;
-        if (!TryGetNemesisState(creature->GetSpawnId(), state))
+        if (!TryGetNemesisState(creature, state))
             return;
 
         ApplyNemesisState(creature, state);
@@ -1449,7 +1584,20 @@ public:
         state.homeY = creature->GetPositionY();
         state.homeZ = creature->GetPositionZ();
         state.lastSeenAt = uint32(GameTime::GetGameTime().count());
-        ActiveNemeses[creature->GetSpawnId()] = state;
+
+        if (ObjectGuid::LowType const spawnId = creature->GetSpawnId())
+            ActiveNemeses[spawnId] = state;
+        else if (IsTemporaryNemesisCandidate(creature))
+            ActiveTemporaryNemeses[creature->GetGUID()] = state;
+    }
+
+    void OnCreatureRemoveWorld(Creature* creature) override
+    {
+        if (!creature || creature->GetSpawnId())
+            return;
+
+        ActiveTemporaryNemeses.erase(creature->GetGUID());
+        TemporaryRegenTickAccumulators.erase(creature->GetGUID());
     }
 
     void OnAllCreatureUpdate(Creature* creature, uint32 /*diff*/) override
@@ -1457,15 +1605,15 @@ public:
         if (!creature)
             return;
 
-        NemesisStore::const_iterator itr = ActiveNemeses.find(creature->GetSpawnId());
-        if (itr == ActiveNemeses.end())
+        NemesisState state;
+        if (!TryGetNemesisState(creature, state))
             return;
 
         if (creature->IsAlive())
             return;
 
-        RegenTickAccumulators.erase(creature->GetSpawnId());
-        DeleteNemesisState(creature->GetSpawnId(), "dead");
+        EraseRegenAccumulator(creature);
+        DeleteNemesisState(creature, "dead");
     }
 };
 
@@ -1482,7 +1630,7 @@ public:
         Creature* creature = attacker->ToCreature();
 
         NemesisState state;
-        if (!TryGetNemesisState(creature->GetSpawnId(), state))
+        if (!TryGetNemesisState(creature, state))
             return;
 
         if (HasAffix(state, NEMESIS_AFFIX_SAVAGE))
@@ -1506,7 +1654,7 @@ public:
         Creature* creature = target->ToCreature();
 
         NemesisState state;
-        if (!TryGetNemesisState(creature->GetSpawnId(), state))
+        if (!TryGetNemesisState(creature, state))
             return;
 
         if (!HasAffix(state, NEMESIS_AFFIX_SPELLWARD))
@@ -1523,16 +1671,16 @@ public:
         Creature* creature = unit->ToCreature();
 
         NemesisState state;
-        if (!TryGetNemesisState(creature->GetSpawnId(), state))
+        if (!TryGetNemesisState(creature, state))
             return;
 
         if (!HasAffix(state, NEMESIS_AFFIX_REGEN) || !creature->IsAlive() || creature->GetHealth() >= creature->GetMaxHealth())
         {
-            RegenTickAccumulators.erase(creature->GetSpawnId());
+            EraseRegenAccumulator(creature);
             return;
         }
 
-        uint32& accumulator = RegenTickAccumulators[creature->GetSpawnId()];
+        uint32& accumulator = GetRegenAccumulator(creature);
         accumulator += diff;
 
         uint32 const interval = GetRegenerationIntervalMs();
@@ -1660,7 +1808,7 @@ public:
         handler->PSendSysMessage("Nemesis target: {} (entry {}, spawn {}, map {})", target->GetName(), target->GetEntry(), uint64(target->GetSpawnId()), target->GetMapId());
 
         NemesisState state;
-        if (!TryGetNemesisState(target->GetSpawnId(), state))
+        if (!TryGetNemesisState(target, state))
         {
             handler->PSendSysMessage("Selected creature is not an active nemesis.");
             return true;
@@ -1714,7 +1862,7 @@ public:
         }
 
         NemesisState state;
-        if (!TryGetNemesisState(target->GetSpawnId(), state))
+        if (!TryGetNemesisState(target, state))
             state = BuildInitialNemesisState(target, player);
 
         uint8 rank = state.rank;
@@ -1730,7 +1878,7 @@ public:
         SaveNemesisState(target, state);
         ApplyNemesisState(target, state);
         target->SetFullHealth();
-        BroadcastRankFiveNemesis(target->GetSpawnId(), ActiveNemeses[target->GetSpawnId()]);
+        BroadcastRankFiveNemesisIfPersistent(target, state);
         handler->PSendSysMessage("Marked {} as nemesis rank {} with affixes {}.", target->GetName(), state.rank, GetAffixList(state.affixMask));
         return true;
     }
@@ -1745,14 +1893,14 @@ public:
         }
 
         NemesisState state;
-        if (!TryGetNemesisState(target->GetSpawnId(), state))
+        if (!TryGetNemesisState(target, state))
         {
             handler->PSendSysMessage("Selected creature is not an active nemesis.");
             return true;
         }
 
         ResetCreatureToBaseState(target, state);
-        DeleteNemesisState(target->GetSpawnId());
+        DeleteNemesisState(target);
         handler->PSendSysMessage("Cleared nemesis state from {}.", target->GetName());
         return true;
     }
@@ -1767,7 +1915,7 @@ public:
         }
 
         NemesisState state;
-        if (!TryGetNemesisState(target->GetSpawnId(), state))
+        if (!TryGetNemesisState(target, state))
         {
             handler->PSendSysMessage("Selected creature is not an active nemesis.");
             return true;
@@ -1816,6 +1964,26 @@ public:
                 GetAffixList(state.affixMask),
                 state.targetGuid,
                 liveCreature ? Acore::StringFormat(" | HP {}/{}", liveCreature->GetHealth(), liveCreature->GetMaxHealth()) : "");
+            ++count;
+        }
+
+        for (auto const& [guid, state] : ActiveTemporaryNemeses)
+        {
+            if (state.mapId != map->GetId())
+                continue;
+
+            Creature* liveCreature = ObjectAccessor::GetCreature(*player, guid);
+            if (!liveCreature)
+                continue;
+
+            handler->PSendSysMessage("Temporary {} | {} | Rank {} | Affixes {} | Target {} | HP {}/{}",
+                guid.GetCounter(),
+                liveCreature->GetName(),
+                state.rank,
+                GetAffixList(state.affixMask),
+                state.targetGuid,
+                liveCreature->GetHealth(),
+                liveCreature->GetMaxHealth());
             ++count;
         }
 
@@ -1868,7 +2036,25 @@ public:
             DeleteNemesisState(spawnId);
         }
 
-        handler->PSendSysMessage("Cleared {} active nemesis record(s) from map {}.", spawnIds.size(), map->GetId());
+        std::vector<ObjectGuid> temporaryGuids;
+        temporaryGuids.reserve(ActiveTemporaryNemeses.size());
+
+        for (auto const& [guid, state] : ActiveTemporaryNemeses)
+            if (state.mapId == map->GetId())
+                temporaryGuids.push_back(guid);
+
+        for (ObjectGuid const& guid : temporaryGuids)
+            if (Creature* liveCreature = ObjectAccessor::GetCreature(*player, guid))
+            {
+                NemesisState state;
+                if (!TryGetNemesisState(liveCreature, state))
+                    continue;
+
+                ResetCreatureToBaseState(liveCreature, state);
+                DeleteNemesisState(liveCreature);
+            }
+
+        handler->PSendSysMessage("Cleared {} active nemesis record(s) from map {}.", spawnIds.size() + temporaryGuids.size(), map->GetId());
         return true;
     }
 
@@ -1876,6 +2062,9 @@ public:
     {
         EnsureCacheLoaded();
         ActiveNemeses.clear();
+        ActiveTemporaryNemeses.clear();
+        RegenTickAccumulators.clear();
+        TemporaryRegenTickAccumulators.clear();
         CharacterDatabase.Execute("DELETE FROM `character_nemesis`");
         handler->PSendSysMessage("Cleared all stored nemesis records.");
         return true;

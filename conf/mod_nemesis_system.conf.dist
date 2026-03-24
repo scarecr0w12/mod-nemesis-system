@@ -14,6 +14,28 @@
 NemesisSystem.Enable = 1
 
 #
+#    NemesisSystem.CitySiegeIntegration.Enable
+#        Description: Allows active City Siege attackers and defenders to roll
+#                     for nemesis promotion when they kill a real player.
+#                     Siege-created nemeses are runtime-only because siege
+#                     creatures are temporary summons.
+#        Default:     0 - disabled
+#                     1 - enabled
+#
+
+NemesisSystem.CitySiegeIntegration.Enable = 0
+
+#
+#    NemesisSystem.CitySiegeIntegration.Chance
+#        Description: Percent chance for an active City Siege attacker or
+#                     defender to trigger a nemesis promotion on a real-player
+#                     kill when the integration is enabled.
+#        Default:     10.0
+#
+
+NemesisSystem.CitySiegeIntegration.Chance = 10.0
+
+#
 #    NemesisSystem.MaxRank
 #        Description: Maximum rank a nemesis can reach.
 #        Default:     5
