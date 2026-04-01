@@ -1,7 +1,6 @@
 #include "AllCreatureScript.h"
 #include "Chat.h"
 #include "CharacterCache.h"
-#include "CitySiegeAPI.h"
 #include "CommandScript.h"
 #include "Config.h"
 #include "Creature.h"
@@ -32,6 +31,13 @@
 #include <sstream>
 #include <vector>
 #include <unordered_map>
+
+#if __has_include("mod-city-siege/src/CitySiegeAPI.h")
+#include "mod-city-siege/src/CitySiegeAPI.h"
+#define NEMESIS_HAS_CITY_SIEGE 1
+#else
+#define NEMESIS_HAS_CITY_SIEGE 0
+#endif
 
 using namespace Acore::ChatCommands;
 
@@ -259,17 +265,35 @@ namespace
 #endif
     }
 
-    CitySiegeAPI::SiegeParticipantRole GetCitySiegeRole(Creature const* creature)
+    bool HasCitySiegeIntegrationSupport()
     {
-        if (!creature)
-            return CitySiegeAPI::SiegeParticipantRole::None;
+#if NEMESIS_HAS_CITY_SIEGE
+        return true;
+#else
+        return false;
+#endif
+    }
 
-        return CitySiegeAPI::GetActiveCreatureRole(creature->GetGUID());
+    bool IsCitySiegeParticipant(Creature const* creature)
+    {
+#if NEMESIS_HAS_CITY_SIEGE
+        if (!creature)
+            return false;
+
+#if __cpp_lib_to_underlying >= 202102L
+        return std::to_underlying(CitySiegeAPI::GetActiveCreatureRole(creature->GetGUID())) != 0;
+#else
+        return static_cast<uint8>(CitySiegeAPI::GetActiveCreatureRole(creature->GetGUID())) != 0;
+#endif
+#else
+        (void)creature;
+        return false;
+#endif
     }
 
     bool IsTemporaryNemesisCandidate(Creature const* creature)
     {
-        return creature && !creature->GetSpawnId() && GetCitySiegeRole(creature) != CitySiegeAPI::SiegeParticipantRole::None;
+        return creature && !creature->GetSpawnId() && IsCitySiegeParticipant(creature);
     }
 
     bool HasAffix(NemesisState const& state, NemesisAffix affix)
@@ -1348,9 +1372,9 @@ namespace
         if (!IsEnabled() || !killer || !killed)
             return false;
 
-        if (GetCitySiegeRole(killer) != CitySiegeAPI::SiegeParticipantRole::None)
+        if (IsCitySiegeParticipant(killer))
         {
-            if (!IsCitySiegeIntegrationEnabled() || !killer->IsInWorld() || IsPlayerbotVictim(killed))
+            if (!HasCitySiegeIntegrationSupport() || !IsCitySiegeIntegrationEnabled() || !killer->IsInWorld() || IsPlayerbotVictim(killed))
                 return false;
 
             NemesisState state;

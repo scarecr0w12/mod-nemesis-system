@@ -12,6 +12,8 @@ survives creature unloads and server restarts.
 Optional City Siege integration can also promote active siege attackers and defenders
 after they kill a real player. Because siege creatures are temporary summons, those
 siege-created nemeses are runtime-only and are cleared when the creature dies or despawns.
+The module now auto-detects City Siege support at compile time, so it can be built
+and installed cleanly whether `mod-city-siege` is present or not.
 
 This scaffold implements the first vertical slice:
 
