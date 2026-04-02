@@ -119,6 +119,14 @@ namespace
 
     std::string constexpr NEMESIS_ADDON_PREFIX = "Nemesis";
     size_t constexpr NEMESIS_ADDON_CHUNK_SIZE = 220;
+    std::array<uint32, 5> constexpr NEMESIS_DEFAULT_VISUAL_AURA_SPELLS =
+    {
+        63130, // Trial of the Champion shield visual level 1
+        63131, // Trial of the Champion shield visual level 2
+        63132, // Trial of the Champion shield visual level 3
+        45265, // Akil'zon static visual
+        28136  // Thaddius visual lightning
+    };
 
     Creature* FindLoadedCreatureBySpawnId(Map* map, ObjectGuid::LowType spawnId);
     std::string GetNemesisDisplayName(Map* map, ObjectGuid::LowType spawnId, NemesisState const& state);
@@ -235,9 +243,58 @@ namespace
         return std::max<uint8>(1, sConfigMgr->GetOption<uint8>("NemesisSystem.AnnounceMinRank", 1));
     }
 
-    uint32 GetVisualAuraSpell()
+    uint8 GetVisualAuraTier(uint8 rank)
     {
-        return sConfigMgr->GetOption<uint32>("NemesisSystem.VisualAuraSpell", 0);
+        if (rank <= 1)
+            return 1;
+
+        return std::min<uint8>(rank, uint8(NEMESIS_DEFAULT_VISUAL_AURA_SPELLS.size()));
+    }
+
+    uint32 GetVisualAuraSpell(uint8 rank)
+    {
+        if (uint32 overrideSpell = sConfigMgr->GetOption<uint32>("NemesisSystem.VisualAuraSpell", 0))
+            return overrideSpell;
+
+        uint8 const tier = GetVisualAuraTier(rank);
+        std::string const configKey = Acore::StringFormat("NemesisSystem.VisualAuraSpellRank{}", uint32(tier));
+        return sConfigMgr->GetOption<uint32>(configKey, NEMESIS_DEFAULT_VISUAL_AURA_SPELLS[tier - 1]);
+    }
+
+    void RemoveNemesisVisualAuras(Creature* creature)
+    {
+        if (!creature)
+            return;
+
+        std::array<uint32, 6> auraSpells =
+        {
+            sConfigMgr->GetOption<uint32>("NemesisSystem.VisualAuraSpell", 0),
+            GetVisualAuraSpell(1),
+            GetVisualAuraSpell(2),
+            GetVisualAuraSpell(3),
+            GetVisualAuraSpell(4),
+            GetVisualAuraSpell(5)
+        };
+
+        for (size_t i = 0; i < auraSpells.size(); ++i)
+        {
+            uint32 const auraSpell = auraSpells[i];
+            if (!auraSpell)
+                continue;
+
+            bool duplicate = false;
+            for (size_t j = 0; j < i; ++j)
+            {
+                if (auraSpells[j] == auraSpell)
+                {
+                    duplicate = true;
+                    break;
+                }
+            }
+
+            if (!duplicate)
+                creature->RemoveAurasDueToSpell(auraSpell);
+        }
     }
 
     uint32 GetAddonBootstrapRecentHours()
@@ -1222,8 +1279,7 @@ namespace
         creature->UpdateSpeed(MOVE_RUN, true);
         ApplyJuggernautImmunity(creature, false);
 
-        if (uint32 auraSpell = GetVisualAuraSpell())
-            creature->RemoveAurasDueToSpell(auraSpell);
+        RemoveNemesisVisualAuras(creature);
 
         creature->UpdateAllStats();
 
@@ -1444,6 +1500,8 @@ namespace
         if (!creature)
             return;
 
+        RemoveNemesisVisualAuras(creature);
+
         uint32 const scaledHealth = std::max<uint32>(1, uint32(float(state.baseHealth) * GetHealthMultiplier(state.rank)));
         float const meleeMinDamage = std::max<float>(BASE_MINDAMAGE, state.baseMeleeMinDamage * GetDamageMultiplier(state.rank));
         float const meleeMaxDamage = std::max<float>(BASE_MAXDAMAGE, state.baseMeleeMaxDamage * GetDamageMultiplier(state.rank));
@@ -1491,7 +1549,7 @@ namespace
         else
             creature->SetHealth(std::min<uint32>(creature->GetHealth(), scaledHealth));
 
-        if (uint32 auraSpell = GetVisualAuraSpell())
+        if (uint32 auraSpell = GetVisualAuraSpell(state.rank))
             if (!creature->HasAura(auraSpell))
                 creature->AddAura(auraSpell, creature);
     }

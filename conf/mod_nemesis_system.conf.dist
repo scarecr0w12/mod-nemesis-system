@@ -324,12 +324,58 @@ NemesisSystem.AnnounceMinRank = 1
 
 #
 #    NemesisSystem.VisualAuraSpell
-#        Description: Optional aura spell applied to active nemeses.
-#                     Set to 0 to disable the visual aura.
-#        Default:     0
+#        Description: Optional global aura override applied to active nemeses.
+#                     When set to 0, rank-based aura settings below are used.
+#                     Set to a spell id to force the same aura on every rank.
+#        Default:     0 (disabled; use rank-based visuals)
 #
 
 NemesisSystem.VisualAuraSpell = 0
+
+#
+#    NemesisSystem.VisualAuraSpellRank1
+#        Description: Aura spell used for rank 1 nemeses when the global
+#                     visual aura override is disabled.
+#        Default:     63130 (Trial of the Champion shield visual level 1)
+#
+
+NemesisSystem.VisualAuraSpellRank1 = 63130
+
+#
+#    NemesisSystem.VisualAuraSpellRank2
+#        Description: Aura spell used for rank 2 nemeses when the global
+#                     visual aura override is disabled.
+#        Default:     63131 (Trial of the Champion shield visual level 2)
+#
+
+NemesisSystem.VisualAuraSpellRank2 = 63131
+
+#
+#    NemesisSystem.VisualAuraSpellRank3
+#        Description: Aura spell used for rank 3 nemeses when the global
+#                     visual aura override is disabled.
+#        Default:     63132 (Trial of the Champion shield visual level 3)
+#
+
+NemesisSystem.VisualAuraSpellRank3 = 63132
+
+#
+#    NemesisSystem.VisualAuraSpellRank4
+#        Description: Aura spell used for rank 4 nemeses when the global
+#                     visual aura override is disabled.
+#        Default:     45265 (Akil'zon static visual)
+#
+
+NemesisSystem.VisualAuraSpellRank4 = 45265
+
+#
+#    NemesisSystem.VisualAuraSpellRank5
+#        Description: Aura spell used for rank 5 and higher nemeses when the
+#                     global visual aura override is disabled.
+#        Default:     28136 (Thaddius visual lightning)
+#
+
+NemesisSystem.VisualAuraSpellRank5 = 28136
 
 #
 #    NemesisSystem.AddonBootstrapRecentHours

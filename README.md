@@ -21,6 +21,7 @@ This scaffold implements the first vertical slice:
 - persistent `character_nemesis` storage in the characters database
 - rank-based size, health, and melee/ranged damage scaling
 - affix rolling with runtime behavior hooks
+- configurable rank-based visual aura support for active nemeses
 - re-application on `OnCreatureAddWorld`
 - cleanup when a tracked nemesis dies
 - decay for stale nemesis records
@@ -59,6 +60,7 @@ This scaffold implements the first vertical slice:
 - Rank 1 rolls one affix. Rank 3+ rolls a second affix.
 - Implemented affixes: `Vampiric`, `Swift`, `Juggernaut`, `Savage`, `Spellward`, `Enraged`, `Regenerating`.
 - Rank 5+ rolls a third affix.
+- Active nemeses also carry a configurable rank-based visual aura by default.
 
 Additional affix behavior:
 
@@ -80,6 +82,20 @@ Additional affix behavior:
 - `NemesisSystem.TrivialKillLevelDelta`
 - `NemesisSystem.CitySiegeIntegration.Enable`
 - `NemesisSystem.CitySiegeIntegration.Chance`
+- `NemesisSystem.VisualAuraSpell`
+- `NemesisSystem.VisualAuraSpellRank1`
+- `NemesisSystem.VisualAuraSpellRank2`
+- `NemesisSystem.VisualAuraSpellRank3`
+- `NemesisSystem.VisualAuraSpellRank4`
+- `NemesisSystem.VisualAuraSpellRank5`
+
+Default visual ladder:
+
+- Rank 1: shield visual level 1
+- Rank 2: shield visual level 2
+- Rank 3: shield visual level 3
+- Rank 4: static lightning visual
+- Rank 5+: Thaddius lightning visual
 
 ## Anti-Feed Config
 
