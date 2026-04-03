@@ -261,6 +261,34 @@ namespace
         return sConfigMgr->GetOption<uint32>(configKey, NEMESIS_DEFAULT_VISUAL_AURA_SPELLS[tier - 1]);
     }
 
+    void AppendUniqueAuraSpell(std::vector<uint32>& auraSpells, uint32 auraSpell)
+    {
+        if (!auraSpell)
+            return;
+
+        if (std::find(auraSpells.begin(), auraSpells.end(), auraSpell) == auraSpells.end())
+            auraSpells.push_back(auraSpell);
+    }
+
+    std::vector<uint32> GetVisualAuraSpellsForRank(uint8 rank)
+    {
+        std::vector<uint32> auraSpells;
+
+        if (uint32 overrideSpell = sConfigMgr->GetOption<uint32>("NemesisSystem.VisualAuraSpell", 0))
+        {
+            auraSpells.push_back(overrideSpell);
+            return auraSpells;
+        }
+
+        uint32 const primaryAuraSpell = GetVisualAuraSpell(rank);
+
+        if (rank >= 4)
+            AppendUniqueAuraSpell(auraSpells, GetVisualAuraSpell(3));
+
+        AppendUniqueAuraSpell(auraSpells, primaryAuraSpell);
+        return auraSpells;
+    }
+
     void RemoveNemesisVisualAuras(Creature* creature)
     {
         if (!creature)
@@ -294,6 +322,21 @@ namespace
 
             if (!duplicate)
                 creature->RemoveAurasDueToSpell(auraSpell);
+        }
+    }
+
+    void ApplyNemesisVisualAuras(Creature* creature, uint8 rank)
+    {
+        if (!creature)
+            return;
+
+        std::vector<uint32> const auraSpells = GetVisualAuraSpellsForRank(rank);
+        for (uint32 const auraSpell : auraSpells)
+        {
+            if (creature->HasAura(auraSpell))
+                continue;
+
+            creature->CastSpell(creature, auraSpell, TRIGGERED_FULL_MASK);
         }
     }
 
@@ -1549,9 +1592,7 @@ namespace
         else
             creature->SetHealth(std::min<uint32>(creature->GetHealth(), scaledHealth));
 
-        if (uint32 auraSpell = GetVisualAuraSpell(state.rank))
-            if (!creature->HasAura(auraSpell))
-                creature->AddAura(auraSpell, creature);
+        ApplyNemesisVisualAuras(creature, state.rank);
     }
 
     bool IsBelowEnrageThreshold(Creature* creature)

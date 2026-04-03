@@ -94,8 +94,8 @@ Default visual ladder:
 - Rank 1: shield visual level 1
 - Rank 2: shield visual level 2
 - Rank 3: shield visual level 3
-- Rank 4: static lightning visual
-- Rank 5+: Thaddius lightning visual
+- Rank 4: shield visual level 3 + static lightning visual
+- Rank 5+: shield visual level 3 + Thaddius lightning visual
 
 ## Anti-Feed Config
 
