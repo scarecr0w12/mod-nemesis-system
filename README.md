@@ -171,24 +171,36 @@ Current addon scaffold behavior:
 - AceDB-backed local nemesis cache used as the addon's working dataset
 - stale fading and hiding based on last-seen timestamps
 - basic detail panel
-- zoomable and pannable placeholder map canvas
+- zone-aware map canvas that now attempts to load real WoW world map tile textures for mapped zones
+- marker plotting for known nemesis last-seen locations using server-provided normalized coordinates
 - filtered bootstrap ingest, chunk reassembly, peer sync, and validated upsert/remove handling
 - waypoint fallback that prints selected nemesis coordinates to chat
 - peer sync over addon comms for sharing validated sightings with guild, party, raid, or public channel scopes
+- addon code split into dedicated modules for bootstrap, data/state, communication, lifecycle, and UI logic
 
 Current addon location model:
 
 - reaching rank 5 broadcasts a rounded last-known location realm-wide
 - recent and relation-matched nemeses are restored via filtered bootstrap instead of full snapshot reloads
 - lower-rank location refresh is driven by validated local sightings and addon-to-addon sharing
+- promotion events now also emit live addon upserts for non-rank-5 nemeses so trackers populate faster
 - local addon cache persists across sessions via AceDB and merges entries by timestamp
 
 Current limitations:
 
-- the client map is still a placeholder plotting surface rather than a real zone-texture map
+- real map texture rendering depends on zone and texture mapping coverage; unmapped or unusual locations still fall back to the plain canvas
 - no dedicated waypoint addon integration yet
 - public-channel peer sync still depends on players already being in the configured channel
 - no compile or in-client runtime verification has been completed yet for this addon bridge
+
+Current addon file layout:
+
+- `ClientAddon/NemesisTracker/Core.lua`: addon bootstrap and shared namespace/state setup
+- `ClientAddon/NemesisTracker/Data.lua`: nemesis store, filtering, sorting, paging, and selection helpers
+- `ClientAddon/NemesisTracker/Comm.lua`: server payload parsing, chunk reassembly, peer sync, and sighting reporting
+- `ClientAddon/NemesisTracker/Lifecycle.lua`: AceDB initialization, slash commands, and event lifecycle wiring
+- `ClientAddon/NemesisTracker/MapData.lua`: zone-to-texture lookup and map tile path resolution
+- `ClientAddon/NemesisTracker/UI.lua`: tracker frame, list, detail panel, and map marker rendering
 
 ## Next Steps
 

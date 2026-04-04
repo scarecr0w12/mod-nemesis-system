@@ -917,6 +917,20 @@ namespace
         SendChunkedAddonPayload(player, BuildAddonEntryPayload("UPSERT_VALIDATED", view));
     }
 
+    void BroadcastNemesisUpsert(ObjectGuid::LowType spawnId, NemesisState const& state)
+    {
+        if (!spawnId || state.rank >= 5)
+            return;
+
+        ForEachOnlinePlayer([&](Player* player)
+        {
+            if (!ShouldIncludeNemesisInBootstrap(player, state))
+                return;
+
+            SendValidatedNemesisUpsert(player, spawnId, state);
+        });
+    }
+
     void BroadcastRankFiveNemesis(ObjectGuid::LowType spawnId, NemesisState const& state)
     {
         if (state.rank < 5)
@@ -1632,6 +1646,8 @@ namespace
         SaveNemesisState(killer, state);
         ApplyNemesisState(killer, state);
         killer->SetFullHealth();
+        if (ObjectGuid::LowType const spawnId = killer->GetSpawnId())
+            BroadcastNemesisUpsert(spawnId, state);
         BroadcastRankFiveNemesisIfPersistent(killer, state);
 
         if (ShouldAnnounceCreate() && state.rank >= GetAnnounceMinRank())

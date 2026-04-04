@@ -8,4 +8,7 @@
 
 MapData.lua
 Core.lua
+Data.lua
+Comm.lua
+Lifecycle.lua
 UI.lua
