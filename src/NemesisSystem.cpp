@@ -1480,6 +1480,29 @@ namespace
             player->ModifyMoney(int32(gold), true);
     }
 
+    void RecordNemesisKill(Player* killer, NemesisState const& state, bool revenge)
+    {
+        if (!killer)
+            return;
+
+        std::string killerName = killer->GetName();
+        CharacterDatabase.EscapeString(killerName);
+
+        CharacterDatabase.Execute(
+            "INSERT INTO `character_nemesis_monthly_kills` "
+            "(`month_key`, `character_guid`, `account_id`, `character_name`, `kill_count`, `revenge_kill_count`, `bounty_kill_count`, `highest_rank_killed`, `last_kill_at`) "
+            "VALUES (DATE_FORMAT(UTC_TIMESTAMP(), '%Y%m'), {}, {}, '{}', 1, {}, {}, {}, UNIX_TIMESTAMP()) "
+            "ON DUPLICATE KEY UPDATE `account_id` = VALUES(`account_id`), `character_name` = VALUES(`character_name`), `kill_count` = `kill_count` + 1, "
+            "`revenge_kill_count` = `revenge_kill_count` + VALUES(`revenge_kill_count`), `bounty_kill_count` = `bounty_kill_count` + VALUES(`bounty_kill_count`), "
+            "`highest_rank_killed` = GREATEST(`highest_rank_killed`, VALUES(`highest_rank_killed`)), `last_kill_at` = VALUES(`last_kill_at`)",
+            killer->GetGUID().GetCounter(),
+            killer->GetSession() ? killer->GetSession()->GetAccountId() : 0,
+            killerName,
+            revenge ? 1u : 0u,
+            revenge ? 0u : 1u,
+            uint32(state.rank));
+    }
+
     bool IsEligibleNemesisKill(Creature* killer, Player* killed)
     {
         if (!IsEnabled() || !killer || !killed)
@@ -1684,6 +1707,7 @@ public:
             return;
 
         bool const revenge = IsRevengeKill(killer, state);
+        RecordNemesisKill(killer, state, revenge);
         RewardRecipients const recipients = CollectRewardRecipients(killer, killed);
         float const rewardMultiplier = GetRewardMultiplier(killed->GetLevel(), recipients.highestLevel);
 

@@ -30,6 +30,7 @@ This scaffold implements the first vertical slice:
 - configurable announcements for creation, rank-up, and kill events
 - anti-feed cooldowns for repeated promotions and same-victim farming
 - initial companion addon transport and client scaffold for live nemesis tracking
+- monthly kill leaderboard tracking for website or external dashboards
 
 ![Nemesis System Emblem](doc/assets/nemesis-emblem.svg)
 
@@ -46,7 +47,8 @@ This scaffold implements the first vertical slice:
 
 1. Build AzerothCore with the module enabled.
 2. Import `data/sql/db-characters/base/nemesis_system.sql` into the characters database.
-   - Existing installs should also apply `data/sql/db-characters/updates/2026_03_22_00_nemesis_last_seen.sql`.
+  - Existing installs should also apply `data/sql/db-characters/updates/2026_03_22_00_nemesis_last_seen.sql`.
+  - Existing installs should also apply `data/sql/db-characters/updates/2026_04_05_00_nemesis_monthly_kills.sql`.
 3. Copy `conf/mod_nemesis_system.conf.dist` to your server config directory if needed.
 4. Restart `worldserver`.
 
@@ -127,6 +129,13 @@ Reward scaling config:
 - `NemesisSystem.RewardOverlevelDiffMax`
 - `NemesisSystem.RewardUnderlevelDiffMax`
 - `NemesisSystem.RewardUnderdogMaxMultiplier`
+
+## Website Leaderboard Data
+
+- Monthly leaderboard rows are stored in `character_nemesis_monthly_kills` in the characters database.
+- Rotation is automatic: each kill is written into a UTC month bucket using `YYYYMM` in `month_key`.
+- The table stores total kills, revenge kills, bounty kills, highest rank killed, and the latest kill timestamp per character for the month.
+- A simple website query can filter by the current month and sort by `kill_count DESC`, with `highest_rank_killed DESC` and `last_kill_at DESC` as tie-breakers.
 
 ## GM Commands
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1 - 2026-04-05
+
+- added `character_nemesis_monthly_kills` tracking so websites can build monthly nemesis kill leaderboards directly from the characters database
+
 ## 0.3.0 - 2026-04-04
 
 - fixed companion addon `V2:CHUNK` reassembly so larger bootstrap and upsert payloads are rebuilt correctly client-side
