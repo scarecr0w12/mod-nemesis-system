@@ -28,6 +28,7 @@
 #include <bit>
 #include <cmath>
 #include <functional>
+#include <mutex>
 #include <sstream>
 #include <vector>
 #include <unordered_map>
@@ -115,6 +116,7 @@ namespace
     NemesisTickStore RegenTickAccumulators;
     TemporaryNemesisStore ActiveTemporaryNemeses;
     TemporaryNemesisTickStore TemporaryRegenTickAccumulators;
+    std::recursive_mutex NemesisStoreMutex;
     bool CacheLoaded = false;
 
     std::string constexpr NEMESIS_ADDON_PREFIX = "Nemesis";
@@ -897,11 +899,18 @@ namespace
 
         for (ObjectGuid::LowType spawnId : spawnIds)
         {
-            NemesisStore::const_iterator itr = ActiveNemeses.find(spawnId);
-            if (itr == ActiveNemeses.end())
-                continue;
+            NemesisState state;
+            {
+                std::lock_guard<std::recursive_mutex> lock(NemesisStoreMutex);
 
-            NemesisAddonView const view = BuildAddonView(player, spawnId, itr->second);
+                NemesisStore::const_iterator itr = ActiveNemeses.find(spawnId);
+                if (itr == ActiveNemeses.end())
+                    continue;
+
+                state = itr->second;
+            }
+
+            NemesisAddonView const view = BuildAddonView(player, spawnId, state);
             SendChunkedAddonPayload(player, BuildAddonEntryPayload("BOOTSTRAP_ENTRY", view));
         }
 
@@ -1106,6 +1115,7 @@ namespace
         if (!spawnId)
             return false;
 
+        std::lock_guard<std::recursive_mutex> lock(NemesisStoreMutex);
         EnsureCacheLoaded();
 
         NemesisStore::iterator itr = ActiveNemeses.find(spawnId);
@@ -1128,6 +1138,8 @@ namespace
         if (!creature)
             return false;
 
+        std::lock_guard<std::recursive_mutex> lock(NemesisStoreMutex);
+
         if (ObjectGuid::LowType const spawnId = creature->GetSpawnId())
             return TryGetNemesisState(spawnId, state);
 
@@ -1143,6 +1155,8 @@ namespace
     {
         if (!creature)
             return;
+
+        std::lock_guard<std::recursive_mutex> lock(NemesisStoreMutex);
 
         if (!creature->GetSpawnId())
         {
@@ -1205,6 +1219,7 @@ namespace
         if (!spawnId)
             return;
 
+        std::lock_guard<std::recursive_mutex> lock(NemesisStoreMutex);
         EnsureCacheLoaded();
 
         ActiveNemeses.erase(spawnId);
@@ -1217,6 +1232,8 @@ namespace
     {
         if (!creature)
             return;
+
+        std::lock_guard<std::recursive_mutex> lock(NemesisStoreMutex);
 
         if (ObjectGuid::LowType const spawnId = creature->GetSpawnId())
         {
@@ -1234,18 +1251,33 @@ namespace
         if (!creature)
             return;
 
+        std::lock_guard<std::recursive_mutex> lock(NemesisStoreMutex);
+
         if (ObjectGuid::LowType const spawnId = creature->GetSpawnId())
             RegenTickAccumulators.erase(spawnId);
         else
             TemporaryRegenTickAccumulators.erase(creature->GetGUID());
     }
 
-    uint32& GetRegenAccumulator(Creature* creature)
+    bool UpdateRegenAccumulator(Creature* creature, uint32 diff, uint32 interval)
     {
-        if (ObjectGuid::LowType const spawnId = creature->GetSpawnId())
-            return RegenTickAccumulators[spawnId];
+        if (!creature)
+            return false;
 
-        return TemporaryRegenTickAccumulators[creature->GetGUID()];
+        std::lock_guard<std::recursive_mutex> lock(NemesisStoreMutex);
+
+        uint32* accumulator = nullptr;
+        if (ObjectGuid::LowType const spawnId = creature->GetSpawnId())
+            accumulator = &RegenTickAccumulators[spawnId];
+        else
+            accumulator = &TemporaryRegenTickAccumulators[creature->GetGUID()];
+
+        *accumulator += diff;
+        if (*accumulator < interval)
+            return false;
+
+        *accumulator %= interval;
+        return true;
     }
 
     void BroadcastRankFiveNemesisIfPersistent(Creature* creature, NemesisState const& state)
@@ -1288,7 +1320,7 @@ namespace
         uint32 affixMask = state.affixMask;
         uint32 const desiredAffixCount = state.rank >= 5 ? 3u : (state.rank >= 3 ? 2u : 1u);
 
-        while (std::popcount(affixMask) < desiredAffixCount)
+        while (static_cast<uint32>(std::popcount(affixMask)) < desiredAffixCount)
             affixMask |= affixes[urand(0, affixes.size() - 1)];
 
         state.affixMask = affixMask;
@@ -1724,6 +1756,7 @@ public:
         state.homeZ = creature->GetPositionZ();
         state.lastSeenAt = uint32(GameTime::GetGameTime().count());
 
+        std::lock_guard<std::recursive_mutex> lock(NemesisStoreMutex);
         if (ObjectGuid::LowType const spawnId = creature->GetSpawnId())
             ActiveNemeses[spawnId] = state;
         else if (IsTemporaryNemesisCandidate(creature))
@@ -1735,6 +1768,7 @@ public:
         if (!creature || creature->GetSpawnId())
             return;
 
+        std::lock_guard<std::recursive_mutex> lock(NemesisStoreMutex);
         ActiveTemporaryNemeses.erase(creature->GetGUID());
         TemporaryRegenTickAccumulators.erase(creature->GetGUID());
     }
@@ -1819,14 +1853,9 @@ public:
             return;
         }
 
-        uint32& accumulator = GetRegenAccumulator(creature);
-        accumulator += diff;
-
         uint32 const interval = GetRegenerationIntervalMs();
-        if (accumulator < interval)
+        if (!UpdateRegenAccumulator(creature, diff, interval))
             return;
-
-        accumulator %= interval;
 
         uint32 healAmount = std::max<uint32>(1, uint32(float(creature->GetMaxHealth()) * (GetRegenerationHealthPct() / 100.0f)));
         creature->ModifyHealth(int32(healAmount));
@@ -1907,7 +1936,10 @@ public:
         state.homeZ = player->GetPositionZ();
         state.lastSeenAt = now;
 
-        ActiveNemeses[spawnId] = state;
+        {
+            std::lock_guard<std::recursive_mutex> lock(NemesisStoreMutex);
+            ActiveNemeses[spawnId] = state;
+        }
         CharacterDatabase.Execute(
             "UPDATE `character_nemesis` SET `map_id` = {}, `zone_id` = {}, `pos_x` = {}, `pos_y` = {}, `pos_z` = {}, `last_seen_at` = {} WHERE `guid` = {}",
             state.mapId,
@@ -2088,11 +2120,24 @@ public:
         uint32 count = 0;
         handler->PSendSysMessage("Active nemeses on map {}:", map->GetId());
 
-        for (auto const& [spawnId, state] : ActiveNemeses)
+        std::vector<std::pair<ObjectGuid::LowType, NemesisState>> persistentNemeses;
+        std::vector<std::pair<ObjectGuid, NemesisState>> temporaryNemeses;
         {
-            if (state.mapId != map->GetId())
-                continue;
+            std::lock_guard<std::recursive_mutex> lock(NemesisStoreMutex);
 
+            persistentNemeses.reserve(ActiveNemeses.size());
+            for (auto const& [spawnId, state] : ActiveNemeses)
+                if (state.mapId == map->GetId())
+                    persistentNemeses.emplace_back(spawnId, state);
+
+            temporaryNemeses.reserve(ActiveTemporaryNemeses.size());
+            for (auto const& [guid, state] : ActiveTemporaryNemeses)
+                if (state.mapId == map->GetId())
+                    temporaryNemeses.emplace_back(guid, state);
+        }
+
+        for (auto const& [spawnId, state] : persistentNemeses)
+        {
             Creature* liveCreature = FindLoadedCreatureBySpawnId(map, spawnId);
             std::string name = GetNemesisDisplayName(map, spawnId, state);
 
@@ -2106,11 +2151,8 @@ public:
             ++count;
         }
 
-        for (auto const& [guid, state] : ActiveTemporaryNemeses)
+        for (auto const& [guid, state] : temporaryNemeses)
         {
-            if (state.mapId != map->GetId())
-                continue;
-
             Creature* liveCreature = ObjectAccessor::GetCreature(*player, guid);
             if (!liveCreature)
                 continue;
@@ -2151,11 +2193,20 @@ public:
         }
 
         std::vector<ObjectGuid::LowType> spawnIds;
-        spawnIds.reserve(ActiveNemeses.size());
+        std::vector<ObjectGuid> temporaryGuids;
+        {
+            std::lock_guard<std::recursive_mutex> lock(NemesisStoreMutex);
 
-        for (auto const& [spawnId, state] : ActiveNemeses)
-            if (state.mapId == map->GetId())
-                spawnIds.push_back(spawnId);
+            spawnIds.reserve(ActiveNemeses.size());
+            for (auto const& [spawnId, state] : ActiveNemeses)
+                if (state.mapId == map->GetId())
+                    spawnIds.push_back(spawnId);
+
+            temporaryGuids.reserve(ActiveTemporaryNemeses.size());
+            for (auto const& [guid, state] : ActiveTemporaryNemeses)
+                if (state.mapId == map->GetId())
+                    temporaryGuids.push_back(guid);
+        }
 
         if (spawnIds.empty())
         {
@@ -2175,13 +2226,6 @@ public:
             DeleteNemesisState(spawnId);
         }
 
-        std::vector<ObjectGuid> temporaryGuids;
-        temporaryGuids.reserve(ActiveTemporaryNemeses.size());
-
-        for (auto const& [guid, state] : ActiveTemporaryNemeses)
-            if (state.mapId == map->GetId())
-                temporaryGuids.push_back(guid);
-
         for (ObjectGuid const& guid : temporaryGuids)
             if (Creature* liveCreature = ObjectAccessor::GetCreature(*player, guid))
             {
@@ -2199,16 +2243,19 @@ public:
 
     static bool HandleClearAll(ChatHandler* handler)
     {
+        std::lock_guard<std::recursive_mutex> lock(NemesisStoreMutex);
         EnsureCacheLoaded();
-        ActiveNemeses.clear();
-        ActiveTemporaryNemeses.clear();
-        RegenTickAccumulators.clear();
-        TemporaryRegenTickAccumulators.clear();
+        {
+            std::lock_guard<std::recursive_mutex> lock(NemesisStoreMutex);
+            ActiveNemeses.clear();
+            ActiveTemporaryNemeses.clear();
+            RegenTickAccumulators.clear();
+            TemporaryRegenTickAccumulators.clear();
+        }
         CharacterDatabase.Execute("DELETE FROM `character_nemesis`");
         handler->PSendSysMessage("Cleared all stored nemesis records.");
         return true;
     }
-
     static bool HandleReload(ChatHandler* handler)
     {
         if (!sConfigMgr->LoadModulesConfigs(true, false))

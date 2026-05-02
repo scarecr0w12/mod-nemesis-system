@@ -147,6 +147,7 @@ The module now includes an initial WoW 3.3.5a client addon scaffold under:
 - `ClientAddon/NemesisTracker/`
 
 Copy that folder into the game client's `Interface/AddOns/` directory.
+The addon now embeds the Ace3 libraries it uses, so it no longer depends on a separately installed `Ace3` addon.
 
 Current addon/server bridge behavior:
 
@@ -201,6 +202,7 @@ Current addon file layout:
 - `ClientAddon/NemesisTracker/Lifecycle.lua`: AceDB initialization, slash commands, and event lifecycle wiring
 - `ClientAddon/NemesisTracker/MapData.lua`: zone-to-texture lookup and map tile path resolution
 - `ClientAddon/NemesisTracker/UI.lua`: tracker frame, list, detail panel, and map marker rendering
+- `ClientAddon/NemesisTracker/Libs/`: embedded Ace3 runtime libraries required by the addon
 
 ## Next Steps
 
